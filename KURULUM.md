@@ -158,12 +158,21 @@ Bot OKX'ten son 2 yılın saatlik fiyatlarını indirir (ilk seferde birkaç dak
 komisyon ve kayma (kötü fiyat) payı dahil dener ve sonucu ekrana yazar. Telegram bağlıysa rapor telefonunuza da gelir.
 Rapor ayrıca `data/backtest_report.txt` dosyasına kaydedilir. Bu test sırasında ana botun kapalı olmasına gerek yok.
 
-Rapor iki bölümdür:
-- **Öğrenme dönemi** (ilk %70): kuralların "bildiği" dönem.
-- **Sınama dönemi** (son %30): kuralın hiç görmediği dönem. Asıl önemli olan budur.
-  Burada da sonuç iyi değilse kurala güvenilmemelidir.
+Test **3 kuralı yan yana** dener. Hepsi aynı fikir (trend + kırılım), sadece hızları farklı:
+1. Şu anki ayarlar (1 saatlik mum, 4 saatlik trend)
+2. 4 saatlik mum, günlük trend (daha yavaş)
+3. Günlük mum, günlük trend (en yavaş)
 
-Rapordaki "alıp hiç satmasaydınız" satırı, aynı dönemde sadece alıp beklemenin sonucunu gösterir (karşılaştırma için).
+Bu ayarlar önceden sabitlendi; sonuca bakıp değiştirilmedi. Her kural için iki satır vardır:
+- **Öğrenme dönemi** (ilk %70)
+- **Sınama dönemi** (son %30): kuralların hiç görmediği dönem. Asıl önemli olan budur.
+
+Acil durdurma (zirveden %10 düşüş) olursa test 7 gün ara verir, sonra sizin "/devam ONAY" yazdığınızı varsayıp devam eder.
+Böylece her dönemin tamamı ölçülür. Kaç kez acil durdurma olduğu raporda yazar.
+"Sadece dolar (USDT) tutmak" satırı, paranızı hiç işlem yapmadan dolarda tutsaydınız TL bazında ne olurdu, onu gösterir.
+Tüm ayrıntılar `data/backtest_report.txt` dosyasındadır.
+
+"Alıp hiç satmamak" satırı, aynı dönemde sadece alıp beklemenin sonucunu gösterir (karşılaştırma için).
 
 > **Unutmayın:** geçmiş veri testi yatırım tavsiyesi değildir. Geçmişte işe yarayan bir kural gelecekte para kaybettirebilir.
 > Geçmiş performans gelecekteki getiriyi garanti etmez. TRY çiftlerinde işlem az olduğu için gerçek fiyatlar testtekinden kötü olabilir.
