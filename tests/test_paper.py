@@ -45,8 +45,10 @@ class Rig:
         self.engine = RiskEngine(settings, self.md, self.fx, self.portfolio, self.events,
                                  tmp_path / "risk_state.json", started_at=self.now - timedelta(hours=1))
         self.engine.evaluate(self.now)
-        self.trader = PaperTrader(self.portfolio, self.engine, self.md, self.events, settings.paper,
-                                  settings.test_trigger, started_at=self.now - timedelta(hours=1))
+        self.trader = PaperTrader(self.portfolio, self.engine, self.md, self.events, settings.paper)
+
+    def buy(self, sym: Symbol = BTC, note: str | None = None) -> list[str]:
+        return self.trader.open(sym, Decimal(1), Decimal("1.5"), self.now, note=note)
 
     def new_portfolio(self) -> PaperPortfolio:
         return PaperPortfolio(Decimal(10000), "TRY", "TRY", self.md, self.fx, self.tmp / "paper_state.json")
@@ -69,8 +71,8 @@ def test_walk_book_averages_levels_and_penalises_thin_books() -> None:
     assert walk_book(book, "sell", Decimal(2)) == (Decimal(99) + Decimal("98.505")) / 2
 
 
-def test_test_trigger_opens_risk_sized_position_and_notifies(rig: Rig) -> None:
-    rig.trader.step(rig.now)
+def test_open_risk_sized_position_and_notifies(rig: Rig) -> None:
+    assert rig.buy(note="trend yukarı") == []
     assert rig.portfolio.open_symbols() == {BTC}
     pos = rig.portfolio.positions[BTC]
     # Loss at the stop (1% + 0.2% costs) stays within 1% of the account.
@@ -81,24 +83,13 @@ def test_test_trigger_opens_risk_sized_position_and_notifies(rig: Rig) -> None:
     assert rig.portfolio.balances["TRY"] == Decimal(10000) - pos.cost
     opened = [e for e in rig.seen if e.kind == TRADE_OPENED]
     assert len(opened) == 1 and opened[0].should_notify and "(deneme)" in opened[0].message
+    assert "Sebep: trend yukarı" in opened[0].message
     # Equity drops only by the entry fee while the price is unchanged.
     assert Decimal(10000) - rig.portfolio.equity() == pytest.approx(pos.cost - pos.quantity * pos.entry_price)
 
 
-def test_next_entry_waits_and_rotates_pairs(rig: Rig) -> None:
-    rig.trader.step(rig.now)
-    rig.trader.step(rig.now + timedelta(minutes=1))
-    assert rig.portfolio.open_symbols() == {BTC}
-    later = rig.now + timedelta(minutes=31)
-    for sym, price in ((BTC, "3500000"), (ETH, "130000"), (USDT, "35")):
-        set_price(rig.md, sym, price, later)
-    rig.engine.evaluate(later)
-    rig.trader.step(later)
-    assert rig.portfolio.open_symbols() == {BTC, ETH}
-
-
 def test_stop_loss_closes_with_loss_in_try_and_usd(rig: Rig) -> None:
-    rig.trader.step(rig.now)
+    rig.buy()
     set_price(rig.md, BTC, "3460000", rig.now)  # below the 1% stop
     rig.trader.step(rig.now)
     assert not rig.portfolio.positions
@@ -112,7 +103,7 @@ def test_stop_loss_closes_with_loss_in_try_and_usd(rig: Rig) -> None:
 
 
 def test_target_exit_is_profit_and_usd_includes_fx_move(rig: Rig) -> None:
-    rig.trader.step(rig.now)
+    rig.buy()
     set_price(rig.md, BTC, "3600000", rig.now)
     set_price(rig.md, USDT, "36", rig.now)  # lira weakened 2.9% meanwhile
     rig.trader.step(rig.now)
@@ -123,17 +114,8 @@ def test_target_exit_is_profit_and_usd_includes_fx_move(rig: Rig) -> None:
     assert closed[0].data["pnl_usd"] < closed[0].data["pnl_try"] / 35
 
 
-def test_max_hold_time_closes(rig: Rig) -> None:
-    rig.trader.step(rig.now)
-    later = rig.now + timedelta(minutes=181)
-    set_price(rig.md, BTC, "3500000", later)
-    rig.trader.step(later)
-    assert BTC not in rig.portfolio.positions
-    assert "süre" in [e for e in rig.seen if e.kind == TRADE_CLOSED][0].message
-
-
 def test_no_exit_on_stale_price(rig: Rig) -> None:
-    rig.trader.step(rig.now)
+    rig.buy()
     old = rig.now - timedelta(minutes=5)
     set_price(rig.md, BTC, "3000000", old)  # crash, but the price is old
     rig.trader.step(rig.now)
@@ -141,36 +123,45 @@ def test_no_exit_on_stale_price(rig: Rig) -> None:
 
 
 def test_manual_stop_blocks_entries_but_keeps_managing_positions(rig: Rig) -> None:
-    rig.trader.step(rig.now)
+    rig.buy()
     rig.engine.stop("test")
     later = rig.now + timedelta(minutes=31)
     for sym, price in ((BTC, "3400000"), (ETH, "130000"), (USDT, "35")):
         set_price(rig.md, sym, price, later)
+    assert any("Elle durduruldu" in r for r in rig.trader.open(ETH, Decimal(1), None, later))
     rig.trader.step(later)
     assert ETH not in rig.portfolio.positions  # no new trade while stopped
     assert BTC not in rig.portfolio.positions  # but the stop-loss still worked
-    assert "test_entry_blocked" not in rig.kinds()
 
 
 def test_drawdown_halt_closes_everything(rig: Rig) -> None:
-    rig.trader.step(rig.now)
+    rig.buy()
     rig.engine._state.drawdown_halt = True
     rig.trader.step(rig.now)
     assert not rig.portfolio.positions
     assert "acil kapatma" in [e.data.get("reason") for e in rig.seen if e.kind == TRADE_CLOSED]
 
 
-def test_thin_pair_is_refused_and_owner_told(rig: Rig) -> None:
+def test_thin_pair_is_refused(rig: Rig) -> None:
     set_price(rig.md, BTC, "3500000", rig.now, depth_try="1000")
-    set_price(rig.md, ETH, "130000", rig.now, depth_try="1000")
-    rig.trader.step(rig.now)
+    reasons = rig.buy()
     assert not rig.portfolio.positions
-    blocked = [e for e in rig.seen if e.kind == "test_entry_blocked"]
-    assert len(blocked) == 1 and "sığ" in blocked[0].message
+    assert any("sığ" in r for r in reasons)
+
+
+def test_raised_stop_hit_is_a_profit_sale_not_a_stop_loss(rig: Rig) -> None:
+    rig.buy()
+    pos = rig.portfolio.positions[BTC]
+    pos.stop_price = pos.entry_price * Decimal("1.01")
+    set_price(rig.md, BTC, str(pos.entry_price * Decimal("1.005")), rig.now)
+    rig.trader.step(rig.now)
+    assert BTC not in rig.portfolio.positions
+    assert STOP_LOSS_HIT not in rig.kinds()
+    assert "kâr korundu" in [e for e in rig.seen if e.kind == TRADE_CLOSED][0].message
 
 
 def test_state_survives_restart(rig: Rig) -> None:
-    rig.trader.step(rig.now)
+    rig.buy()
     again = rig.new_portfolio()
     assert again.restored and again.open_symbols() == {BTC}
     assert again.balances == rig.portfolio.balances
@@ -184,7 +175,7 @@ def test_corrupt_state_raises(rig: Rig) -> None:
 
 
 def test_snapshot_has_try_and_usd(rig: Rig) -> None:
-    rig.trader.step(rig.now)
+    rig.buy()
     snap = rig.portfolio.snapshot()
     assert Decimal(snap["equity_usd"]) == pytest.approx(Decimal(snap["equity_try"]) / 35, rel=Decimal("1e-3"))
     assert snap["positions"][0]["pair"] == "BTC/TRY"

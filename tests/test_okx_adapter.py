@@ -124,3 +124,16 @@ async def test_stream_tickers(adapter: OkxAdapter) -> None:
 async def test_has_no_order_methods(adapter: OkxAdapter) -> None:
     # Phase 1 safety: nothing that could send an order exists.
     assert not [m for m in dir(adapter) if "order" in m and "book" not in m]
+
+
+def test_parse_candles_drops_unfinished_bar_and_sorts_oldest_first() -> None:
+    from cryptobot.exchanges.okx import parse_candles
+
+    rows = [
+        ["1700007200000", "3", "4", "2", "3.5", "10", "35", "35", "0"],  # still forming
+        ["1700003600000", "2", "3", "1", "3", "5", "15", "15", "1"],
+        ["1700000000000", "1", "2", "0.5", "2", "4", "8", "8", "1"],
+    ]
+    out = parse_candles(rows)
+    assert [c.close for c in out] == [2.0, 3.0]
+    assert out[0].ts < out[1].ts

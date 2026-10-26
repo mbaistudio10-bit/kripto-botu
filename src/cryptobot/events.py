@@ -144,15 +144,16 @@ INSTANT_KINDS = frozenset({TRADE_OPENED, TRADE_CLOSED, STOP_LOSS_HIT})
 def emit_trade_opened(
     events: EventLog, *, trade_id: str, symbol: str, quantity: Decimal, price: Decimal,
     value_try: Decimal, stop_price: Decimal | None, target_price: Decimal | None = None,
-    paper: bool = True,
+    paper: bool = True, note: str | None = None,
 ) -> Event:
+    """note: why the bot bought, in Turkish (the strategy's rationale)."""
     tag = " (deneme)" if paper else ""
     stop = f"\nZarar-kes (stop): {fmt_num(stop_price)}" if stop_price is not None else ""
     target = f"\nHedef: {fmt_num(target_price)}" if target_price is not None else ""
     return events.emit(
         Level.BILGI, TRADE_OPENED,
         f"🛒 ALIŞ{tag}: {symbol}\nMiktar: {quantity.normalize():f} @ {fmt_num(price)}\n"
-        f"Tutar: {fmt_try(value_try)}{stop}{target}",
+        f"Tutar: {fmt_try(value_try)}{stop}{target}" + (f"\nSebep: {note}" if note else ""),
         notify=True, key=trade_id, trade_id=trade_id, symbol=symbol, side="BUY",
         quantity=quantity, price=price, value_try=value_try, stop_price=stop_price,
         target_price=target_price, paper=paper,

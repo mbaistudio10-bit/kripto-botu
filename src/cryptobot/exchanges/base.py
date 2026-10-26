@@ -9,7 +9,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Sequence
 
-from cryptobot.domain.models import Instrument, MarketType, OrderBook, Symbol, Ticker
+from datetime import datetime
+
+from cryptobot.domain.models import Candle, Instrument, MarketType, OrderBook, Symbol, Ticker
 
 
 class ExchangeError(Exception):
@@ -44,3 +46,10 @@ class ExchangeAdapter(ABC):
     @abstractmethod
     def stream_tickers(self, symbols: Sequence[Symbol]) -> AsyncIterator[Ticker]:
         """Yield tickers as they arrive. Reconnecting is the adapter's job."""
+
+    @abstractmethod
+    async def fetch_candles(
+        self, symbol: Symbol, bar_minutes: int, before: datetime | None = None, limit: int = 100
+    ) -> list[Candle]:
+        """Closed candles, oldest first. `before`: only bars that opened before this time
+        (None = the most recent ones). Unfinished bars are never returned."""

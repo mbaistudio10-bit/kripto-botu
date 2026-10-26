@@ -1,4 +1,4 @@
-"""Entry point: python -m cryptobot [--config config/settings.yaml] [--once]"""
+"""Entry point: python -m cryptobot [--config config/settings.yaml] [--once] [--backtest [--days N]]"""
 
 from __future__ import annotations
 
@@ -16,12 +16,14 @@ from pydantic import ValidationError
 import aiohttp
 
 from cryptobot.api.jarvis import JarvisApi, JarvisWebhook, start_api
+from cryptobot.backtest.run import run_backtest, send_to_telegram
 from cryptobot.config import Settings, load_settings
 from cryptobot.domain.models import TradingMode
 from cryptobot.envfile import ensure_env_file, ensure_keys, load_env
 from cryptobot.events import ErrorEventHandler, EventLog, Level
 from cryptobot.exchanges.base import ExchangeAdapter, ExchangeError
 from cryptobot.exchanges.registry import create_adapter
+from cryptobot.market_data.candles import CandleService
 from cryptobot.market_data.fx import FxRateService
 from cryptobot.market_data.service import MarketDataService, check_pairs
 from cryptobot.notify.telegram import TelegramApi, TelegramBot, parse_chat_id
@@ -30,12 +32,15 @@ from cryptobot.paper.portfolio import PaperPortfolio, PaperStateError
 from cryptobot.paper.trader import PaperTrader
 from cryptobot.risk.engine import RiskEngine
 from cryptobot.status import build_snapshot, render_console, render_telegram, write_snapshot
+from cryptobot.strategy.runner import StrategyRunner
+from cryptobot.strategy.trend import TrendBreakoutStrategy
 
 log = logging.getLogger("cryptobot")
 
 DISCLAIMER = (
     "Bu yazılım yatırım tavsiyesi değildir. Geçmiş performans gelecekteki getiriyi "
-    "garanti etmez. Faz 3: sahte parayla deneme işlemleri yapar, borsaya hiçbir emir göndermez."
+    "garanti etmez. Faz 4: trend stratejisiyle sahte parayla deneme işlemleri yapar, "
+    "borsaya hiçbir emir göndermez."
 )
 
 
@@ -177,11 +182,19 @@ async def run(settings: Settings, once: bool) -> int:
             engine.stop("Deneme hesabı dosyası (data/paper_state.json) okunamadı")
         elif portfolio.restored:
             print(f"Deneme hesabı kaldığı yerden devam ediyor: {len(portfolio.positions)} açık pozisyon.")
-        trader = PaperTrader(portfolio, engine, md, events, settings.paper, settings.test_trigger,
-                             started_at=started_at)
+        trader = PaperTrader(portfolio, engine, md, events, settings.paper)
+        strategy_pairs = [p for p in settings.strategy.pairs if p in pairs]
+        candles = CandleService(adapter, strategy_pairs, settings.strategy.bar_minutes,
+                                settings.strategy.history_bars, settings.strategy.refresh_seconds,
+                                None if once else settings.backtest.cache_dir)
+        runner = StrategyRunner(trader, engine, candles, TrendBreakoutStrategy(settings.strategy),
+                                settings.strategy, settings.exits, events, pairs)
 
         def snapshot() -> dict:
-            return build_snapshot(settings, md, fx, started_at, engine.evaluate(), portfolio.snapshot())
+            snap = build_snapshot(settings, md, fx, started_at, engine.evaluate(), portfolio.snapshot())
+            if settings.strategy.enabled:
+                snap["strategy"] = runner.snapshot()
+            return snap
 
         tasks = [asyncio.create_task(md.run(), name="market-data")]
         session = aiohttp.ClientSession()
@@ -219,9 +232,17 @@ async def run(settings: Settings, once: bool) -> int:
             tasks.append(asyncio.create_task(_refresh_listing(adapter, settings, engine)))
             if settings.trading_mode is TradingMode.PAPER_TRADING:
                 tasks.append(asyncio.create_task(trader.run(), name="paper-trader"))
-                if settings.test_trigger is not None and settings.test_trigger.enabled:
-                    print("DENEME TETİKLEYİCİ açık: bu bir strateji değildir, sadece deneme işlemleri "
-                          f"için her {settings.test_trigger.every_minutes:g} dakikada bir küçük bir alış dener.")
+                if settings.strategy.enabled and strategy_pairs:
+                    tasks.append(asyncio.create_task(candles.run(), name="candles"))
+                    tasks.append(asyncio.create_task(runner.run(), name="strategy"))
+                    s = settings.strategy
+                    print(f"Strateji açık: trend takibi ({', '.join(map(str, strategy_pairs))}), "
+                          f"{s.bar_minutes} dakikalık mumlar, {s.trend_bar_minutes // 60} saatlik trend filtresi. "
+                          "Alış sadece bir mum kapanınca ve kurallar uyunca olur; saatlerce alış olmaması normaldir.")
+                else:
+                    print("Strateji kapalı (settings.yaml → strategy → enabled: false): yeni alış yapılmaz.")
+            if settings.test_trigger is not None:
+                print("Not: ayar dosyasındaki eski 'test_trigger' bölümü artık kullanılmıyor (yerine strateji geldi).")
             if telegram is not None:
                 tasks.append(asyncio.create_task(telegram.run(
                     f"✅ Achilles: Kripto Botu başladı ({settings.trading_mode.value}). "
@@ -253,10 +274,24 @@ async def run(settings: Settings, once: bool) -> int:
             await session.close()
 
 
+async def backtest(settings: Settings, days: int | None) -> int:
+    print("\nGEÇMİŞ VERİ TESTİ: strateji geçmiş fiyatlar üzerinde denenecek. Bu birkaç dakika sürebilir.")
+    async with create_adapter(settings.exchange) as adapter:
+        code, text = await run_backtest(settings, adapter, days)
+    print("\n" + text)
+    if code == 0:
+        print(f"\nRapor kaydedildi: {settings.backtest.report_file}")
+        if await send_to_telegram(settings, text):
+            print("Rapor Telegram'a da gönderildi.")
+    return code
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cryptobot")
     parser.add_argument("--config", default="config/settings.yaml")
     parser.add_argument("--once", action="store_true", help="print one snapshot and exit")
+    parser.add_argument("--backtest", action="store_true", help="test the strategy on past prices")
+    parser.add_argument("--days", type=int, default=None, help="backtest length in days")
     args = parser.parse_args(argv)
 
     try:
@@ -269,6 +304,8 @@ def main(argv: list[str] | None = None) -> int:
     print(DISCLAIMER)
     log.info("starting, mode=%s exchange=%s", settings.trading_mode.value, settings.exchange.name)
     try:
+        if args.backtest:
+            return asyncio.run(backtest(settings, args.days))
         return asyncio.run(run(settings, args.once))
     except KeyboardInterrupt:
         print("\nBot durduruldu.")

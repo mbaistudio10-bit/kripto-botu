@@ -36,6 +36,10 @@ class PaperPosition:
     target_price: Decimal | None
     opened_at: datetime
     mark_price: Decimal  # last seen bid, used when no fresh price exists
+    # Exit module state (see strategy/exits.py); survives a restart.
+    initial_stop: Decimal | None = None
+    highest: Decimal | None = None  # best candle close since entry
+    breakeven: bool = False
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -50,6 +54,9 @@ class PaperPosition:
             "target_price": None if self.target_price is None else str(self.target_price),
             "opened_at": self.opened_at.isoformat(),
             "mark_price": str(self.mark_price),
+            "initial_stop": None if self.initial_stop is None else str(self.initial_stop),
+            "highest": None if self.highest is None else str(self.highest),
+            "breakeven": self.breakeven,
         }
 
     @classmethod
@@ -66,6 +73,9 @@ class PaperPosition:
             target_price=None if raw.get("target_price") is None else Decimal(raw["target_price"]),
             opened_at=datetime.fromisoformat(raw["opened_at"]),
             mark_price=Decimal(raw.get("mark_price", raw["entry_price"])),
+            initial_stop=None if raw.get("initial_stop") is None else Decimal(raw["initial_stop"]),
+            highest=None if raw.get("highest") is None else Decimal(raw["highest"]),
+            breakeven=bool(raw.get("breakeven", False)),
         )
 
 
@@ -178,7 +188,7 @@ class PaperPortfolio:
         self.balances[symbol.quote] = cash - cost
         self.fees_try += self.to_risk(fee, symbol.quote) or Decimal(0)
         pos = PaperPosition(trade_id, symbol, quantity, price, cost, cost_try, cost_usd,
-                            stop, target, now, price)
+                            stop, target, now, price, initial_stop=stop, highest=price)
         self.positions[symbol] = pos
         self.save()
         return pos

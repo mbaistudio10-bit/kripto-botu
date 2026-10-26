@@ -1,7 +1,8 @@
-"""Paper trader: simulated fills, stop-loss / target / time exits, emergency close,
-and the PLACEHOLDER test trigger that opens practice trades until Phase 4.
+"""Paper trader: simulated fills, stop-loss / target exits and emergency close.
 
-Every entry goes through RiskEngine.max_quantity and RiskEngine.check_trade.
+Entries come from the strategy runner (strategy/runner.py), which also applies the
+bar-close exit rules. Every entry goes through RiskEngine.max_quantity and
+RiskEngine.check_trade.
 Every fill is announced through emit_trade_opened / emit_trade_closed, which
 Telegram (Achilles) and the Jarvis webhook pick up.
 """
@@ -11,12 +12,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import ROUND_DOWN, Decimal
 
-from cryptobot.config import PaperConfig, PracticeTriggerConfig
+from cryptobot.config import PaperConfig
 from cryptobot.domain.models import OrderBook, Symbol
-from cryptobot.events import EventLog, Level, emit_trade_closed, emit_trade_opened
+from cryptobot.events import EventLog, emit_trade_closed, emit_trade_opened
 from cryptobot.market_data.service import MarketDataService
 from cryptobot.paper.portfolio import PaperPortfolio
 from cryptobot.risk.engine import RiskEngine, TradeIntent
@@ -64,18 +65,16 @@ class PaperTrader:
         md: MarketDataService,
         events: EventLog,
         config: PaperConfig,
-        trigger: PracticeTriggerConfig | None,
-        started_at: datetime | None = None,
     ) -> None:
         self._pf = portfolio
         self._engine = engine
         self._md = md
         self._events = events
         self._config = config
-        self._trigger = trigger if trigger is not None and trigger.enabled else None
-        start = started_at or datetime.now(timezone.utc)
-        self.next_entry_at = start + timedelta(minutes=trigger.first_after_minutes if trigger else 0)
-        self._rr = 0  # round robin over the trigger pairs
+
+    @property
+    def portfolio(self) -> PaperPortfolio:
+        return self._pf
 
     # ---------------------------------------------------------------- fills
 
@@ -112,10 +111,6 @@ class PaperTrader:
                 self.close(symbol, "acil kapatma", "acil durdurma (zirveden düşüş limiti)", now)
             return
         self._manage_exits(now)
-        if self._trigger is not None and now >= self.next_entry_at:
-            opened = self._test_entry(now)
-            minutes = self._trigger.every_minutes if opened else self._trigger.retry_minutes
-            self.next_entry_at = now + timedelta(minutes=minutes)
 
     def _manage_exits(self, now: datetime) -> None:
         for symbol, pos in list(self._pf.positions.items()):
@@ -124,18 +119,18 @@ class PaperTrader:
                 continue  # no reliable price: never exit on old data
             pos.mark_price = t.bid
             if t.bid <= pos.stop_price:
-                self.close(symbol, "stop-loss", None, now)
+                if pos.stop_price >= pos.entry_price:  # stop was raised: profit protected
+                    self.close(symbol, "satış", "iz süren stop çalıştı (kâr korundu)", now)
+                else:
+                    self.close(symbol, "stop-loss", None, now)
             elif pos.target_price is not None and t.bid >= pos.target_price:
                 self.close(symbol, "satış", "hedef fiyata ulaştı", now)
-            elif self._trigger is not None and now - pos.opened_at >= timedelta(
-                minutes=self._trigger.max_hold_minutes
-            ):
-                self.close(symbol, "satış", "en uzun tutma süresi doldu", now)
 
     # ---------------------------------------------------------------- actions
 
     def open(
-        self, symbol: Symbol, stop_pct: Decimal, target_pct: Decimal | None, now: datetime
+        self, symbol: Symbol, stop_pct: Decimal, target_pct: Decimal | None, now: datetime,
+        note: str | None = None,
     ) -> list[str]:
         """Try to open a paper LONG. Returns the reasons it was refused (empty = opened)."""
         t = self._md.ticker(symbol)
@@ -170,7 +165,8 @@ class PaperTrader:
             return [f"{symbol}: {exc}"]
         value_try = self._pf.positions[symbol].cost_try
         emit_trade_opened(self._events, trade_id=trade_id, symbol=str(symbol), quantity=qty,
-                          price=fill.price, value_try=value_try, stop_price=stop, target_price=target)
+                          price=fill.price, value_try=value_try, stop_price=stop, target_price=target,
+                          note=note)
         return []
 
     def close(self, symbol: Symbol, reason: str, note: str | None, now: datetime) -> bool:
@@ -186,34 +182,3 @@ class PaperTrader:
                           quantity=done.quantity, price=done.exit_price, pnl_try=done.pnl_try,
                           pnl_usd=done.pnl_usd, reason=reason, note=note)
         return True
-
-    # ---------------------------------------------------------------- test trigger
-
-    def _test_entry(self, now: datetime) -> bool:
-        """PLACEHOLDER (not a strategy): buy the next allowed pair from the list."""
-        assert self._trigger is not None
-        pairs = [p for p in self._trigger.pairs if p in self._md.pairs]
-        if not pairs:
-            return False
-        halts = {h.message for h in self._engine.halts()}
-        problems: list[str] = []
-        for i in range(len(pairs)):
-            symbol = pairs[(self._rr + i) % len(pairs)]
-            if symbol in self._pf.positions:
-                continue
-            reasons = self.open(symbol, self._trigger.stop_loss_pct, self._trigger.take_profit_pct, now)
-            if not reasons:
-                self._rr = (self._rr + i + 1) % len(pairs)
-                return True
-            problems += [r for r in reasons if r not in halts and r not in problems]
-            if halts:
-                break  # the same halt blocks every pair
-        log.info("test trigger: nothing bought (%s)", "; ".join(problems) or "halted")
-        if problems and not halts:
-            # Rate limited by the notifier (same key at most every 30 minutes).
-            self._events.emit(
-                Level.BILGI, "test_entry_blocked",
-                "Deneme alışı yapılamadı, risk kuralları izin vermedi:\n• " + "\n• ".join(problems),
-                notify=True, key="test_trigger", problems=problems,
-            )
-        return False

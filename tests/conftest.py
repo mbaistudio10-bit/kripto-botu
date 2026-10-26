@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from cryptobot.config import Settings, load_settings
-from cryptobot.domain.models import BookLevel, Instrument, MarketType, OrderBook, Symbol, Ticker
+from cryptobot.domain.models import BookLevel, Candle, Instrument, MarketType, OrderBook, Symbol, Ticker
 from cryptobot.exchanges.base import ExchangeAdapter
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,9 +40,12 @@ def make_ticker(pair: str, last: str, bid: str | None = None, ask: str | None = 
 class FakeAdapter(ExchangeAdapter):
     name = "fake"
 
-    def __init__(self, prices: dict[str, str], listed: dict[str, bool] | None = None) -> None:
+    def __init__(self, prices: dict[str, str], listed: dict[str, bool] | None = None,
+                 candles: dict[str, list[Candle]] | None = None) -> None:
         self.prices = prices
         self.listed = listed if listed is not None else {p: True for p in prices}
+        self.candles = candles or {}
+        self.candle_calls = 0
 
     async def connect(self) -> None:
         pass
@@ -72,3 +75,12 @@ class FakeAdapter(ExchangeAdapter):
     async def stream_tickers(self, symbols: Sequence[Symbol]) -> AsyncIterator[Ticker]:
         for s in symbols:
             yield await self.fetch_ticker(s)
+
+    async def fetch_candles(
+        self, symbol: Symbol, bar_minutes: int, before: datetime | None = None, limit: int = 100
+    ) -> list[Candle]:
+        self.candle_calls += 1
+        rows = self.candles.get(str(symbol), [])
+        if before is not None:
+            rows = [c for c in rows if c.ts < before]
+        return rows[-limit:]

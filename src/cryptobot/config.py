@@ -120,28 +120,75 @@ class PaperConfig(_Strict):
     check_every_seconds: float = Field(default=2, gt=0)
 
 
-class PracticeTriggerConfig(_Strict):
-    """PLACEHOLDER entry rule so paper trading can be tested before Phase 4.
+def _symbols(v: object) -> list[Symbol]:
+    if not isinstance(v, list):
+        raise ValueError("pairs must be a list like [BTC/TRY, ETH/TRY]")
+    return [Symbol.parse(p) if isinstance(p, str) else p for p in v]
 
-    It is NOT a strategy and has no edge: every `every_minutes` it buys the next
-    allowed pair, with a fixed stop-loss, target and maximum holding time.
-    """
+
+class StrategyConfig(_Strict):
+    """Trend breakout: buy when a pair breaks its recent high while the bigger
+    (higher-timeframe) trend is up. Decisions use closed candles only."""
 
     enabled: bool = True
-    pairs: list[Symbol] = Field(min_length=1)
-    first_after_minutes: float = Field(default=3, ge=0)
-    every_minutes: float = Field(default=30, gt=0)
-    retry_minutes: float = Field(default=5, gt=0)
-    stop_loss_pct: Decimal = Field(default=Decimal(1), gt=0, lt=50)
-    take_profit_pct: Decimal = Field(default=Decimal("1.5"), gt=0)
-    max_hold_minutes: float = Field(default=180, gt=0)
+    pairs: list[Symbol] = Field(default_factory=lambda: [Symbol("BTC", "TRY"), Symbol("ETH", "TRY")])
+    bar_minutes: Literal[15, 30, 60, 120, 240] = 60
+    # The trend filter looks at bars this long, built from the entry bars.
+    trend_bar_minutes: Literal[60, 120, 240, 1440] = 240
+    trend_ema_fast: int = Field(default=20, ge=2)
+    trend_ema_slow: int = Field(default=50, ge=3)
+    ema_period: int = Field(default=50, ge=2)  # entry-timeframe trend line
+    breakout_bars: int = Field(default=20, ge=2)  # close above the high of this many bars
+    atr_period: int = Field(default=14, ge=2)
+    stop_atr: float = Field(default=2.5, gt=0)  # first stop = entry - stop_atr x ATR
+    # Skip pairs that barely move (fees eat the profit) or move wildly.
+    min_atr_pct: float = Field(default=0.3, ge=0)
+    max_atr_pct: float = Field(default=6, gt=0)
+    history_bars: int = Field(default=1000, ge=100, le=5000)  # bars loaded at start
+    refresh_seconds: float = Field(default=60, ge=10)
+    # A signal is only acted on this soon after its candle closed.
+    act_within_minutes: float = Field(default=10, gt=0)
 
     @field_validator("pairs", mode="before")
     @classmethod
     def _parse_pairs(cls, v: object) -> list[Symbol]:
-        if not isinstance(v, list):
-            raise ValueError("pairs must be a list like [BTC/TRY, ETH/TRY]")
-        return [Symbol.parse(p) if isinstance(p, str) else p for p in v]
+        return _symbols(v)
+
+    @model_validator(mode="after")
+    def _check(self) -> StrategyConfig:
+        if self.trend_bar_minutes % self.bar_minutes or self.trend_bar_minutes < self.bar_minutes:
+            raise ValueError("trend_bar_minutes must be a multiple of bar_minutes")
+        if self.trend_ema_fast >= self.trend_ema_slow:
+            raise ValueError("trend_ema_fast must be smaller than trend_ema_slow")
+        if self.min_atr_pct >= self.max_atr_pct:
+            raise ValueError("min_atr_pct must be smaller than max_atr_pct")
+        return self
+
+
+class ExitConfig(_Strict):
+    """Exit rules, independent of the entry strategy."""
+
+    # Move the stop to entry (+ costs) once price is this many R above entry
+    # (R = distance between entry and the first stop).
+    breakeven_at_r: float = Field(default=1.0, gt=0)
+    breakeven_buffer_bps: float = Field(default=20, ge=0)
+    # After break-even the stop follows the highest close at this many ATR.
+    trail_atr: float = Field(default=3.0, gt=0)
+    # Sell a trade that never reached break-even after this many bars...
+    stale_after_bars: int = Field(default=48, ge=1)
+    # ...and every trade after this many bars.
+    max_hold_bars: int = Field(default=240, ge=1)
+    # Sell when the higher-timeframe trend turns down.
+    exit_on_trend_break: bool = True
+
+
+class BacktestConfig(_Strict):
+    days: int = Field(default=730, ge=30, le=3650)
+    # The first part is the learning period, the rest is the unseen test period.
+    in_sample_pct: float = Field(default=70, ge=10, le=90)
+    slippage_bps: float = Field(default=10, ge=0)  # per buy and per sell
+    cache_dir: Path = Path("data/candles")
+    report_file: Path = Path("data/backtest_report.txt")
 
 
 class StatusConfig(_Strict):
@@ -174,16 +221,18 @@ class Settings(_Strict):
     liquidity: LiquidityConfig
     status: StatusConfig
     paper: PaperConfig = PaperConfig()
-    test_trigger: PracticeTriggerConfig | None = None
+    strategy: StrategyConfig = StrategyConfig()
+    exits: ExitConfig = ExitConfig()
+    backtest: BacktestConfig = BacktestConfig()
+    # Phase 3 placeholder, replaced by `strategy`. Old settings files still load.
+    test_trigger: dict | None = None
     telegram: TelegramConfig = TelegramConfig()
     jarvis: JarvisConfig = JarvisConfig()
 
     @field_validator("pairs", mode="before")
     @classmethod
     def _parse_pairs(cls, v: object) -> list[Symbol]:
-        if not isinstance(v, list):
-            raise ValueError("pairs must be a list like [BTC/TRY, ETH/TRY]")
-        return [Symbol.parse(p) if isinstance(p, str) else p for p in v]
+        return _symbols(v)
 
     @model_validator(mode="after")
     def _cross_checks(self) -> Settings:
@@ -201,10 +250,9 @@ class Settings(_Strict):
             missing = {pair.base, pair.quote} - assets
             if missing:
                 raise ValueError(f"{pair} uses assets not in supported_assets: {sorted(missing)}")
-        if self.test_trigger is not None:
-            unknown = [str(p) for p in self.test_trigger.pairs if p not in self.pairs]
-            if unknown:
-                raise ValueError(f"test_trigger pairs must also be in pairs: {unknown}")
+        unknown = [str(p) for p in self.strategy.pairs if p not in self.pairs]
+        if unknown:
+            raise ValueError(f"strategy pairs must also be in pairs: {unknown}")
         for ccy in (self.display_currency, self.risk_currency, self.starting_capital_currency):
             if ccy not in assets:
                 raise ValueError(f"currency {ccy} is not in supported_assets")
