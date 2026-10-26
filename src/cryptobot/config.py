@@ -132,7 +132,7 @@ class StrategyConfig(_Strict):
 
     enabled: bool = True
     pairs: list[Symbol] = Field(default_factory=lambda: [Symbol("BTC", "TRY"), Symbol("ETH", "TRY")])
-    bar_minutes: Literal[15, 30, 60, 120, 240] = 60
+    bar_minutes: Literal[15, 30, 60, 120, 240, 1440] = 60
     # The trend filter looks at bars this long, built from the entry bars.
     trend_bar_minutes: Literal[60, 120, 240, 1440] = 240
     trend_ema_fast: int = Field(default=20, ge=2)
@@ -187,6 +187,11 @@ class BacktestConfig(_Strict):
     # The first part is the learning period, the rest is the unseen test period.
     in_sample_pct: float = Field(default=70, ge=10, le=90)
     slippage_bps: float = Field(default=10, ge=0)  # per buy and per sell
+    # After a drawdown emergency stop, act as if the owner typed "/devam ONAY"
+    # after this many days (0 = stop trading for the rest of the period).
+    drawdown_pause_days: float = Field(default=7, ge=0)
+    # Also test the fixed slower rule sets (backtest/variants.py) side by side.
+    compare_variants: bool = True
     cache_dir: Path = Path("data/candles")
     report_file: Path = Path("data/backtest_report.txt")
 

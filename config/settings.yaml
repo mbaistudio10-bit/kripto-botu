@@ -97,7 +97,7 @@ paper:
 strategy:
   enabled: true
   pairs: [BTC/TRY, ETH/TRY]
-  bar_minutes: 60          # 1-hour candles
+  bar_minutes: 60          # 1-hour candles (240 = 4 hours, 1440 = daily)
   trend_bar_minutes: 240   # 4-hour candles for the big-picture trend
   trend_ema_fast: 20
   trend_ema_slow: 50
@@ -129,6 +129,8 @@ backtest:
   days: 730
   in_sample_pct: 70
   slippage_bps: 10           # worse price on every buy and sell (0.10%), on top of the fee
+  drawdown_pause_days: 7     # after an emergency stop: pause 7 days, then continue (0 = stop the test)
+  compare_variants: true     # also test 2 fixed, slower rule sets (4-hour and daily candles)
   cache_dir: data/candles
   report_file: data/backtest_report.txt
 

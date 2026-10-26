@@ -8,7 +8,7 @@ import pytest
 import cryptobot.market_data.candles as candles_mod
 
 from cryptobot.backtest.engine import Backtester
-from cryptobot.backtest.report import metrics, render
+from cryptobot.backtest.report import comparison_verdict, metrics, render_details
 from cryptobot.backtest.run import run_backtest, split_point
 from cryptobot.config import ExitConfig, Settings, StrategyConfig
 from cryptobot.domain.models import Candle, Symbol
@@ -105,9 +105,71 @@ def test_max_two_positions_and_drawdown_halt(settings: Settings) -> None:
 
     # Every bar a new loser: the drawdown emergency stop must end trading.
     crash = from_closes([100.0 * 0.97**i for i in range(200)], spread=0.0)
-    res = bt(settings, StubStrategy(set(range(1, 200)), stop_dist=1.0)).run({BTC: crash}, T0, T0 + 200 * H)
+    b = Backtester(StubStrategy(set(range(1, 200)), stop_dist=1.0), settings.exits, settings.risk,
+                   settings.paper, 10, 10_000.0, drawdown_pause_days=0)
+    res = b.run({BTC: crash}, T0, T0 + 200 * H)
     assert any("ACİL" in h for h in res.halts) or any("günlük" in h for h in res.halts)
     assert metrics(res).max_drawdown_pct < 15
+
+
+def test_after_drawdown_halt_trading_resumes_after_pause(settings: Settings) -> None:
+    # Steady losers for a week, then the market goes flat: trading must restart after the pause.
+    n = 24 * 30
+    closes = [100.0 * 0.995**i for i in range(24 * 8)] + [100.0 * 0.995 ** (24 * 8)] * (n - 24 * 8)
+    candles = from_closes(closes, spread=0.0)
+    strat = StubStrategy(set(range(1, n, 6)), stop_dist=0.3)
+    res = Backtester(strat, settings.exits, settings.risk, settings.paper, 10, 10_000.0,
+                     drawdown_pause_days=7).run({BTC: candles}, T0, T0 + n * H)
+    assert res.drawdown_halts >= 1
+    halt_at = next(i for i, h in enumerate(res.halts) if "ACİL" in h)
+    assert any("devam edildi" in h for h in res.halts[halt_at:])
+    assert max(t.entry_ts for t in res.trades) > T0 + timedelta(days=15)
+    stopped = Backtester(strat, settings.exits, settings.risk, settings.paper, 10, 10_000.0,
+                         drawdown_pause_days=0).run({BTC: candles}, T0, T0 + n * H)
+    assert len(stopped.trades) < len(res.trades)
+
+
+def test_variants_are_fixed_and_start_with_current_settings(settings: Settings) -> None:
+    from cryptobot.backtest.variants import variants
+
+    vs = variants(settings.strategy, settings.exits)
+    assert [v.key for v in vs] == ["current", "trend_4h", "trend_1d"]
+    assert vs[0].strategy == settings.strategy
+    assert (vs[1].strategy.bar_minutes, vs[1].strategy.trend_bar_minutes) == (240, 1440)
+    assert (vs[2].strategy.bar_minutes, vs[2].strategy.trend_bar_minutes) == (1440, 1440)
+    assert len(variants(settings.strategy, settings.exits, compare=False)) == 1
+
+
+def test_daily_variant_runs_on_resampled_candles(settings: Settings) -> None:
+    from cryptobot.backtest.variants import variants
+    from cryptobot.strategy.indicators import resample
+
+    v = variants(settings.strategy, settings.exits)[2]
+    strat = TrendBreakoutStrategy(v.strategy)
+    hourly = random_walk(24 * 400, seed=9, vol=0.006)
+    daily = resample(hourly, 60, 1440)[0]
+    assert len(daily) == 400 and daily[1].ts - daily[0].ts == timedelta(days=1)
+    start = daily[strat.warmup_bars].ts
+    res = Backtester(strat, v.exits, settings.risk, settings.paper, 10, 10_000.0).run(
+        {BTC: daily}, start, daily[-1].ts + timedelta(days=1))
+    assert res.equity_curve and all(t.entry_ts >= start for t in res.trades)
+
+
+def test_verdict_needs_unseen_profit_and_enough_trades(settings: Settings) -> None:
+    from cryptobot.backtest.engine import BtResult, BtTrade
+    from cryptobot.backtest.variants import variants
+
+    v = variants(settings.strategy, settings.exits)[0]
+
+    def result(ret: float, n: int, win: bool) -> BtResult:
+        r = BtResult("x", T0, T0 + H, 10_000.0, 10_000.0 * (1 + ret))
+        r.trades = [BtTrade(BTC, T0, T0, 1, 1, 1, 10.0 if (win or i % 3) else -40.0, 0, 0, "", "")
+                    for i in range(n)]
+        return r
+
+    assert "Hiçbir kural" in comparison_verdict([(v, result(0.05, 30, True), result(-0.02, 30, False))])
+    assert "az" in comparison_verdict([(v, result(0.05, 30, True), result(0.03, 5, True))])
+    assert "her iki dönemde" in comparison_verdict([(v, result(0.05, 30, True), result(0.03, 20, True))])
 
 
 def test_real_strategy_end_to_end_and_turkish_report(settings: Settings) -> None:
@@ -122,8 +184,8 @@ def test_real_strategy_end_to_end_and_turkish_report(settings: Settings) -> None
     assert all(start <= t.entry_ts < split for t in is_.trades)
     assert all(split <= t.entry_ts for t in oos.trades)
     assert is_.signals > 0
-    text = render(is_, oos, ["başlık"])
-    assert "GEÇMİŞ VERİ TESTİ" in text and "garanti etmez" in text and "Sınama" in text
+    text = render_details(is_, oos)
+    assert "Öğrenme" in text and "Sınama" in text
     assert "alıp hiç satmasaydınız" in text
 
 
@@ -149,8 +211,12 @@ async def test_run_backtest_writes_report(settings: Settings, tmp_path) -> None:
         update={"cache_dir": tmp_path / "c", "report_file": tmp_path / "r.txt"})})
     code, text = await run_backtest(s, FakeAdapter({}, candles=data), days=100, now=now)
     assert code == 0, text
-    assert (tmp_path / "r.txt").read_text(encoding="utf-8").startswith("📈")
-    assert "Dolar bazında" in text
+    full = (tmp_path / "r.txt").read_text(encoding="utf-8")
+    assert full.startswith("📈") and "AYRINTILAR" in full and "Dolar bazında" in full
+    assert "3 kural karşılaştırması" in text and "şu anki ayarlar" in text
+    assert "Günlük mum" in text and "4 saatlik mum" in text
+    assert "sadece dolar (USDT) tutmak" in text and "garanti etmez" in text
+    assert len(text) < 4000  # one Telegram message
 
 
 async def test_run_backtest_without_data(settings: Settings, tmp_path) -> None:

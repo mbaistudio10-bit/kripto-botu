@@ -61,6 +61,11 @@ python -m pytest -q
   open; fee (`paper.fee_bps`) + `backtest.slippage_bps` per side; stop gaps fill at the open; risk-per-trade,
   max positions, 45% position cap, daily/weekly halts (UTC+3) and the drawdown stop are simulated.
   The period is split chronologically (70% in-sample / 30% out-of-sample); parameters are fixed, not fitted.
+  After a drawdown halt the test pauses `backtest.drawdown_pause_days` (7) and resumes with a peak reset
+  (simulated "/devam ONAY"), so the whole period is measured.
+- Variants (`backtest/variants.py`, `compare_variants`): the current settings plus two fixed slower rule sets
+  (4h candles + daily trend, daily candles + daily trend), all built by resampling the downloaded 1h candles and
+  traded over identical dates. The verdict requires profit and PF >= 1.1 out of sample with >= 10 trades.
   A test (`test_no_look_ahead_full_history_equals_truncated_history`) checks that decisions on full history
   equal decisions on history cut at that bar. On pure random walks the strategy loses slightly (costs), as it should.
 

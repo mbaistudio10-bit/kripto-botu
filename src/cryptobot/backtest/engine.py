@@ -10,7 +10,9 @@ Realism rules:
     open if it already gapped below it, minus slippage.
   * Risk rules mirror the live RiskEngine: risk per trade, max open positions,
     max share of the account per position, daily / weekly loss halts (Turkey time)
-    and the drawdown emergency stop (closes everything, no more trading).
+    and the drawdown emergency stop (closes everything). After the emergency stop
+    the test pauses `drawdown_pause_days`, then resumes as if the owner typed
+    "/devam ONAY" (peak reset), so the whole period is measured.
 """
 
 from __future__ import annotations
@@ -59,6 +61,7 @@ class BtResult:
     usd_end: float | None = None
     signals: int = 0
     skipped: int = 0  # signals not taken (limits, cash, position cap)
+    drawdown_halts: int = 0
 
 
 @dataclass(slots=True)
@@ -75,7 +78,7 @@ class _Pos:
 class Backtester:
     def __init__(
         self, strategy: TrendBreakoutStrategy, exits: ExitConfig, limits: RiskLimits,
-        paper: PaperConfig, slippage_bps: float, capital: float,
+        paper: PaperConfig, slippage_bps: float, capital: float, drawdown_pause_days: float = 7,
     ) -> None:
         self.strategy = strategy
         self.exits = exits
@@ -84,6 +87,7 @@ class Backtester:
         self.max_pos_frac = float(paper.max_position_pct) / 100
         self.slip = slippage_bps / 10_000
         self.capital = capital
+        self.dd_pause = timedelta(days=drawdown_pause_days) if drawdown_pause_days > 0 else None
 
     def run(
         self, series: dict[Symbol, list[Candle]], start: datetime, end: datetime,
@@ -107,6 +111,7 @@ class Backtester:
         day_key = week_key = None
         day_start = week_start = peak = self.capital
         daily_halt = weekly_halt = dd_halt = False
+        dd_resume_at: datetime | None = None
         bars_in_market = 0
         first_open: dict[Symbol, float] = {}
 
@@ -170,6 +175,9 @@ class Backtester:
             local = ts + bar + offset
             dk, wk = local.date(), local.isocalendar()[:2]
             eq = equity()
+            if dd_halt and dd_resume_at is not None and ts >= dd_resume_at:
+                dd_halt, dd_resume_at, peak = False, None, eq  # "/devam ONAY": peak reset
+                res.halts.append(f"{local:%d.%m.%Y}: acil durdurmadan sonra devam edildi (zirve sıfırlandı)")
             if dk != day_key:
                 day_key, day_start, daily_halt = dk, eq, False
             if wk != week_key:
@@ -183,7 +191,13 @@ class Backtester:
                 res.halts.append(f"{local:%d.%m.%Y}: haftalık zarar limiti doldu")
             if not dd_halt and (peak - eq) / peak * 100 >= float(lim.max_total_drawdown_pct):
                 dd_halt = True
-                res.halts.append(f"{local:%d.%m.%Y}: zirveden düşüş limiti, ACİL DURDURMA (test burada durur)")
+                res.drawdown_halts += 1
+                if self.dd_pause is not None:
+                    dd_resume_at = ts + self.dd_pause
+                    pause = f"{self.dd_pause.days} gün ara"
+                else:
+                    pause = "test burada durur"
+                res.halts.append(f"{local:%d.%m.%Y}: zirveden düşüş limiti, ACİL DURDURMA ({pause})")
                 for sym in list(positions):
                     close(sym, last_close[sym] * (1 - self.slip), ts, "acil kapatma", "acil durdurma")
                 pending.clear()
@@ -200,7 +214,7 @@ class Backtester:
                         close(sym, c.close * (1 - self.slip), ts, d.exit_reason, d.note or "")
                     continue
                 if dd_halt or ts + bar >= end:
-                    continue
+                    continue  # pending entries are also refused in enter() while halted
                 sig = strat.signal_at(p, i)
                 if sig.is_entry:
                     res.signals += 1
