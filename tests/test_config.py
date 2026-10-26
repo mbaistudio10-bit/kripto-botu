@@ -42,8 +42,8 @@ def test_roundtrip(settings: Settings) -> None:
 
 
 @pytest.mark.parametrize("mode", ["LIVE_TRADING", "BACKTEST", "KILL_SWITCH"])
-def test_phase1_rejects_other_modes(settings: Settings, mode: str) -> None:
-    with pytest.raises(ValidationError, match="not allowed in Phase 1"):
+def test_rejects_non_paper_modes(settings: Settings, mode: str) -> None:
+    with pytest.raises(ValidationError, match="not allowed yet"):
         Settings.model_validate(_with(settings, trading_mode=mode))
 
 

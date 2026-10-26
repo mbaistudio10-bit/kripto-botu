@@ -13,18 +13,26 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+import aiohttp
+
+from cryptobot.api.jarvis import JarvisApi, JarvisWebhook, start_api
 from cryptobot.config import Settings, load_settings
+from cryptobot.envfile import ensure_env_file, ensure_keys, load_env
+from cryptobot.events import ErrorEventHandler, EventLog, Level
 from cryptobot.exchanges.base import ExchangeAdapter, ExchangeError
 from cryptobot.exchanges.registry import create_adapter
 from cryptobot.market_data.fx import FxRateService
 from cryptobot.market_data.service import MarketDataService, check_pairs
-from cryptobot.status import build_snapshot, render_console, write_snapshot
+from cryptobot.notify.telegram import TelegramApi, TelegramBot, parse_chat_id
+from cryptobot.report import build_report, period_start
+from cryptobot.risk.engine import FlatPortfolio, RiskEngine
+from cryptobot.status import build_snapshot, render_console, render_telegram, write_snapshot
 
 log = logging.getLogger("cryptobot")
 
 DISCLAIMER = (
     "Bu yazılım yatırım tavsiyesi değildir. Geçmiş performans gelecekteki getiriyi "
-    "garanti etmez. Faz 1: sadece fiyat okur, hiçbir emir göndermez."
+    "garanti etmez. Faz 2: fiyat okur ve riskleri izler, hiçbir emir göndermez."
 )
 
 
@@ -53,8 +61,82 @@ async def startup_check(adapter: ExchangeAdapter, settings: Settings) -> list:
     return result.available
 
 
+def setup_telegram(
+    settings: Settings, events: EventLog, engine: RiskEngine, snapshot_fn, session: aiohttp.ClientSession
+) -> TelegramBot | None:
+    cfg = settings.telegram
+    if not cfg.enabled:
+        return None
+    env = load_env(cfg.env_file)
+    token = env.get("TELEGRAM_BOT_TOKEN")
+    if not token:
+        print(f"Telegram ayarlı değil ({cfg.env_file} dosyasında TELEGRAM_BOT_TOKEN yok). "
+              "Telefona bildirim gitmeyecek. Kurulum: KURULUM.md bölüm 3.")
+        return None
+    chat_id = parse_chat_id(env.get("TELEGRAM_CHAT_ID"))
+    if chat_id is None:
+        print("Telegram: TELEGRAM_CHAT_ID yok. Telegram'da kendi botunuza bir mesaj yazın; "
+              "kimlik numaranızı hem burada hem Telegram'da göstereceğim.")
+    else:
+        print("Telegram bağlı: uyarılar telefonunuza gidecek. Komutlar için Telegram'da /yardim yazın.")
+
+    def report_text(period: str) -> str:
+        now = datetime.now(timezone.utc)
+        since = period_start(now, period, settings.risk.reset_utc_offset_hours)
+        return build_report(events.read_since(since), period, since).text()
+
+    api = TelegramApi(cfg.api_base_url, token, session)
+    return TelegramBot(
+        cfg, api, chat_id, engine, events,
+        status_text=lambda: render_telegram(snapshot_fn(), settings.risk.reset_utc_offset_hours),
+        report_text=report_text,
+    )
+
+
+def setup_jarvis(
+    settings: Settings, events: EventLog, engine: RiskEngine, snapshot_fn, session: aiohttp.ClientSession
+) -> tuple[JarvisApi | None, JarvisWebhook | None]:
+    cfg = settings.jarvis
+    if not cfg.enabled:
+        return None, None
+    env_path = settings.telegram.env_file
+    try:
+        added = ensure_keys(env_path, ["JARVIS_READ_KEY", "JARVIS_CONTROL_KEY"])
+    except OSError as exc:
+        print(f"Jarvis anahtarları {env_path} dosyasına yazılamadı: {exc}. Jarvis bağlantısı kapalı.")
+        return None, None
+    if added:
+        print(f"Jarvis için iki anahtar oluşturuldu ve {env_path} dosyasına yazıldı "
+              "(JARVIS_READ_KEY: sadece okuma, JARVIS_CONTROL_KEY: acil durdurma). Bunları sadece Jarvis'e verin.")
+    env = load_env(env_path)
+    try:
+        api = JarvisApi(engine, events, snapshot_fn, env["JARVIS_READ_KEY"], env.get("JARVIS_CONTROL_KEY"),
+                        settings.risk.reset_utc_offset_hours)
+    except (KeyError, ValueError) as exc:
+        print(f"Jarvis bağlantısı kapalı: anahtarlar hatalı ({exc}).")
+        return None, None
+    webhook = None
+    if env.get("JARVIS_WEBHOOK_URL"):
+        webhook = JarvisWebhook(env["JARVIS_WEBHOOK_URL"], env["JARVIS_READ_KEY"], session)
+        events.subscribe(webhook.on_event)
+    return api, webhook
+
+
+async def _refresh_listing(adapter: ExchangeAdapter, settings: Settings, engine: RiskEngine) -> None:
+    """Re-check every few minutes whether our pairs are still trading (delist rule)."""
+    while True:
+        await asyncio.sleep(settings.status.listing_check_minutes * 60)
+        try:
+            result = await check_pairs(adapter, settings.pairs, settings.market_type)
+        except ExchangeError as exc:
+            log.warning("listing check failed: %s", exc)
+            continue
+        engine.set_live_pairs(result.available)
+
+
 async def run(settings: Settings, once: bool) -> int:
     started_at = datetime.now(timezone.utc)
+    events = EventLog(None if once else settings.status.events_file)
     async with create_adapter(settings.exchange) as adapter:
         try:
             pairs = await startup_check(adapter, settings)
@@ -68,29 +150,81 @@ async def run(settings: Settings, once: bool) -> int:
 
         md = MarketDataService(adapter, pairs, settings.market_data)
         fx = FxRateService(md, settings.fx)
-        md_task = asyncio.create_task(md.run(), name="market-data")
+        engine = RiskEngine(
+            settings, md, fx,
+            portfolio=FlatPortfolio(settings.starting_capital),
+            events=events,
+            state_path=None if once else settings.status.risk_state_file,
+            live_pairs=pairs,
+            started_at=started_at,
+        )
+
+        def snapshot() -> dict:
+            return build_snapshot(settings, md, fx, started_at, engine.evaluate())
+
+        tasks = [asyncio.create_task(md.run(), name="market-data")]
+        session = aiohttp.ClientSession()
+        telegram: TelegramBot | None = None
+        jarvis_runner = None
+        shutdown_note = "⚪ Kripto Botu kapatıldı. Yeni işlem açılmıyor, izleme durdu."
         try:
             if once:
                 # Wait until every pair has a price (max 20s), print once, exit.
                 for _ in range(40):
-                    if all(md.ticker(p) for p in pairs):
+                    if all(md.ticker(p) and md.book(p) for p in pairs):
                         break
                     await asyncio.sleep(0.5)
-                snap = build_snapshot(settings, md, fx, started_at)
+                snap = snapshot()
                 write_snapshot(settings.status.status_file, snap)
                 print(render_console(snap))
                 return 0 if all(md.ticker(p) for p in pairs) else 4
+
+            logging.getLogger().addHandler(ErrorEventHandler(events))
+            with contextlib.suppress(OSError):
+                if ensure_env_file(settings.telegram.env_file):
+                    print(f"Gizli ayar dosyası oluşturuldu: {settings.telegram.env_file.resolve()} "
+                          "(Telegram anahtarınızı buraya yazacaksınız, KURULUM.md bölüm 3).")
+            telegram = setup_telegram(settings, events, engine, snapshot, session)
+            jarvis_api, jarvis_hook = setup_jarvis(settings, events, engine, snapshot, session)
+            if jarvis_api is not None:
+                try:
+                    jarvis_runner = await start_api(jarvis_api, settings.jarvis.host, settings.jarvis.port)
+                    print(f"Jarvis bağlantısı açık: http://{settings.jarvis.host}:{settings.jarvis.port}/api/v1 "
+                          "(durum okuma + acil durdurma, emir yok).")
+                except OSError as exc:
+                    print(f"Jarvis bağlantısı açılamadı (port {settings.jarvis.port} dolu olabilir): {exc}")
+            if jarvis_hook is not None:
+                tasks.append(asyncio.create_task(jarvis_hook.run(), name="jarvis-webhook"))
+            tasks.append(asyncio.create_task(_refresh_listing(adapter, settings, engine)))
+            if telegram is not None:
+                tasks.append(asyncio.create_task(telegram.run(
+                    f"✅ Achilles: Kripto Botu başladı ({settings.trading_mode.value}). "
+                    "Uyarılar buraya gelecek. Komutlar için /yardim yazın."
+                ), name="telegram"))
+            events.emit(Level.BILGI, "started", "Bot başladı.", mode=settings.trading_mode.value)
             while True:
                 await asyncio.sleep(settings.status.print_every_seconds)
-                if md_task.done():
-                    md_task.result()  # surface the crash
-                snap = build_snapshot(settings, md, fx, started_at)
+                for task in tasks:
+                    if task.done():
+                        task.result()  # surface the crash
+                snap = snapshot()
                 write_snapshot(settings.status.status_file, snap)
                 print(render_console(snap))
+        except Exception as exc:
+            log.exception("bot crashed")
+            shutdown_note = f"🔴 KRİTİK\nKripto Botu bir hata nedeniyle durdu: {type(exc).__name__}. Bilgisayardan yeniden başlatın."
+            raise
         finally:
-            md_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await md_task
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+            if telegram is not None:
+                await telegram.send_now(shutdown_note)
+            if jarvis_runner is not None:
+                await jarvis_runner.cleanup()
+            await session.close()
 
 
 def main(argv: list[str] | None = None) -> int:

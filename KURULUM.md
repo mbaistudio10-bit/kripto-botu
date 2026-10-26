@@ -1,101 +1,118 @@
-# Kripto Botu: Kurulum ve Çalıştırma Rehberi (Faz 1)
+# Kripto Botu: Kurulum ve Kullanım Rehberi (Faz 2)
 
 > **Önemli:** Bu yazılım yatırım tavsiyesi değildir. Geçmiş performans gelecekteki getiriyi garanti etmez.
-> Faz 1'deki bot **sadece fiyatları okur**. Hiçbir emir göndermez, hesabınıza erişmez ve API anahtarı istemez.
+> Bot şu an **gerçek emir göndermez**. Fiyatları okur, riskleri izler ve size Telegram'dan (Achilles) haber verir.
 
-Bu rehber kodlama bilgisi gerektirmez. Adımları sırayla yapmanız yeterli.
-
----
-
-## 1. Python'u kurun (bir kez yapılır)
-
-### Windows
-1. https://www.python.org/downloads/ adresine gidin.
-2. Sarı **"Download Python 3.x"** düğmesine basın (3.11 veya daha yeni olmalı).
-3. İndirilen dosyayı açın. **En alttaki "Add python.exe to PATH" kutusunu mutlaka işaretleyin.**
-4. **"Install Now"** düğmesine basın ve kurulum bitince pencereyi kapatın.
-
-### Mac
-1. https://www.python.org/downloads/ adresinden **macOS** sürümünü indirin (3.11 veya daha yeni).
-2. İndirilen `.pkg` dosyasını açıp "Devam" diyerek kurun.
+Kodlama bilgisi gerekmez. Python kurmanıza da gerek yok.
 
 ---
 
-## 2. Bot dosyalarını yerleştirin
+## 1. Programı indirin
 
-1. Size gönderilen `kripto-botu.zip` dosyasını indirin.
-2. Dosyaya sağ tıklayıp **"Tümünü ayıkla"** (Mac'te çift tıklama) ile açın.
-3. Çıkan `kripto-botu` klasörünü kolay bulacağınız bir yere koyun (örneğin Masaüstü).
+1. GitHub'daki proje sayfasında sağdaki **Releases → "KriptoBotu (en son sürüm)"** bağlantısına tıklayın.
+2. Windows için **KriptoBotu-Windows.zip**, Mac için **KriptoBotu-Mac.zip** dosyasını indirin.
+3. Zip'e sağ tıklayıp **"Tümünü ayıkla"** deyin. Çıkan `KriptoBotu` klasörünü Masaüstüne koyun.
 
----
-
-## 3. Kurulumu çalıştırın (bir kez yapılır)
-
-- **Windows:** `kripto-botu` klasöründeki **`kurulum_windows.bat`** dosyasına çift tıklayın.
-  - "Windows kişisel bilgisayarınızı korudu" uyarısı çıkarsa **"Ek bilgi" → "Yine de çalıştır"** deyin.
-- **Mac:** **`kurulum_mac.command`** dosyasına sağ tıklayıp **"Aç"** deyin (ilk seferde güvenlik onayı ister).
-
-Siyah bir pencere açılır, gerekli paketler internetten indirilir ve testler çalışır.
-Sonunda `22 passed` ve **"Kurulum tamam"** yazısını görmelisiniz. Bir tuşa basıp kapatın.
+**Güncelleme yaparken:** yeni zip'i aynı klasörün üstüne açabilirsiniz. `.env` dosyanız ve `data` klasörünüz silinmez.
 
 ---
 
-## 4. Botu başlatın
+## 2. Botu başlatın
 
-- **Windows:** **`calistir_windows.bat`** dosyasına çift tıklayın.
-- **Mac:** **`calistir_mac.command`** dosyasına çift tıklayın.
+`KriptoBotu` klasöründeki **KriptoBotu** dosyasına çift tıklayın.
+- "Windows kişisel bilgisayarınızı korudu" çıkarsa: **"Ek bilgi" → "Yine de çalıştır"**.
 
-Önce bot OKX'te çiftlerin olup olmadığını kontrol eder:
+Siyah pencerede önce çiftler kontrol edilir, sonra her 5 saniyede bir fiyat ve risk tablosu çıkar.
+**Durdurmak için:** pencere seçiliyken **Ctrl + C**.
 
-```
-  [OK]   BTC/TRY borsada var ve işlem görüyor
-  [OK]   ETH/TRY borsada var ve işlem görüyor
-  [OK]   USDT/TRY borsada var ve işlem görüyor
-```
+İlk çalıştırmada klasörde **`.env`** adlı bir dosya oluşur. Bu sizin gizli ayar dosyanızdır.
 
-Sonra her 5 saniyede bir şöyle bir tablo yazar:
+---
 
-```
-=== Kripto Botu | 2026-10-26T09:00:00+00:00 | mod: PAPER_TRADING | borsa: OKX ===
-USD/TRY kuru: 41.9500 (USDT/TRY, güncel)
-Çift             Son fiyat         USD   24s %  Spread(bps)  Durum
-BTC/TRY       3512345.6000  83727.0000    1.20         2.85  canlı
-...
-```
+## 3. Telegram'ı (Achilles) bağlayın
 
-**Durdurmak için:** pencere seçiliyken **Ctrl + C** tuşlarına basın.
+### 3a. Anahtarı yenileyin (önemli, bir kez)
+Bot anahtarınız sohbette paylaşıldığı için artık güvenli değil. Yenisini alın:
+1. Telegram'da **@BotFather**'a gidin ve **`/revoke`** yazın.
+2. **Achilles** botunu seçin. BotFather size **yeni bir anahtar** verir (eski anahtar artık çalışmaz).
+3. Bu yeni anahtarı **kimseyle paylaşmayın**, sohbete de yapıştırmayın. Sadece aşağıdaki dosyaya yazın.
 
-### Tablodaki kelimelerin anlamı
-| Kelime | Anlamı |
+### 3b. `.env` dosyasını doldurun
+1. Botu kapatın (Ctrl + C).
+2. `KriptoBotu` klasöründeki **`.env`** dosyasına sağ tıklayın → **"Birlikte aç" → "Not Defteri"**.
+3. Şu iki satırı doldurun (eşittirin sağına, boşluk bırakmadan):
+   ```
+   TELEGRAM_BOT_TOKEN=BotFather'ın verdiği yeni anahtar
+   TELEGRAM_CHAT_ID=Telegram kimlik numaranız
+   ```
+   Kimlik numaranızı bilmiyorsanız bu satırı boş bırakın, botu başlatın ve Achilles'e Telegram'dan bir mesaj yazın:
+   Achilles size numaranızı söyler. Onu buraya yazıp botu yeniden başlatın.
+4. Kaydedin (Ctrl + S) ve botu yeniden başlatın.
+
+Telefonunuza **"✅ Achilles: Kripto Botu başladı"** mesajı gelirse her şey tamam.
+
+> Mac'te `.env` dosyası gizlidir. Klasördeyken **Cmd + Shift + .** tuşlarına basınca görünür.
+
+### 3c. Telegram komutları
+| Komut | Ne yapar |
 |---|---|
-| Son fiyat | Son işlem fiyatı (TRY) |
-| USD | Aynı fiyatın dolar karşılığı (USDT/TRY kuruyla) |
-| 24s % | Son 24 saatteki değişim |
-| Spread (bps) | Alış ve satış fiyatı arasındaki fark. 1 bps = %0,01. Küçük olması iyidir. |
-| canlı / ESKİ VERİ | Fiyat 30 saniyeden eskiyse "ESKİ VERİ" yazar |
-| Kur "ESKİ" | Kur 5 dakikadan eskiyse bot ileride yeni pozisyon açmayacak (güvenlik kuralı) |
+| `/durum` | Botun anlık durumu, fiyatlar, bakiye |
+| `/limitler` | Risk limitleri ve ne kadarının kullanıldığı |
+| `/rapor` | Bugünkü kazanç özeti (`/rapor hafta`, `/rapor ay`) |
+| `/durdur` | Yeni işlem açmayı durdurur. Bot izlemeye devam eder |
+| `/devam` | Durdurmayı kaldırır |
+| `/onayla` | Ayar dosyasında gevşettiğiniz limitleri onaylar |
+| `/yardim` | Komut listesi |
+
+Bot sadece **sizin** Telegram hesabınızdan gelen komutlara cevap verir. Başka kişilerin ve başka botların mesajlarını yok sayar.
+
+### 3d. Size ne zaman mesaj gelir?
+- 🔴 **KRİTİK:** günlük/haftalık zarar limiti doldu, acil durdurma, bot çöktü, açık pozisyonu olan çift borsadan kalktı
+- 🟠 **UYARI:** limite yaklaşılıyor, kur eski, bir çiftin likiditesi yetersiz, sistem hatası, biri botu durdurdu
+- 🛒 **Alış**, 💰 **Satış**, 🛑 **Stop-loss**: her işlemde anında (işlemler Faz 3'teki deneme modunda başlayacak)
+- Aynı uyarı 30 dakikada bir defadan fazla gelmez. KRİTİK ve işlem mesajları her zaman gelir.
 
 ---
 
-## 5. Ekranda [YOK] yazarsa
+## 4. Risk kuralları (bot bunları kendi uygular)
 
-`[YOK] BTC/TRY bu borsa adresinde bulunamadı` görürseniz, TRY çiftleri bu OKX adresinde yok demektir.
-Türkiye'deki TRY çiftleri **OKX TR**'de işlem görür. Bu durumda ekranın fotoğrafını bana gönderin, adresi birlikte düzeltelim.
+| Kural | Ne olur |
+|---|---|
+| Günlük zarar %3 | O gün yeni işlem açılmaz. Gece 00:00'da (TR) kendiliğinden açılır. Elle kaldırılamaz. |
+| Haftalık zarar %6 | Pazartesiye kadar yeni işlem açılmaz. Elle kaldırılamaz. |
+| Zirveden düşüş %10 | **Acil durdurma**: yeni işlem yok, açık pozisyonlar kapatılır. Kaldırmak için `/devam ONAY`. |
+| İşlem başına risk %1 | Stop fiyatına kadar olası zarar bakiyenin %1'ini geçemez. |
+| En fazla 2 pozisyon | Aynı anda en fazla 2 açık işlem. |
+| Kur 5 dakikadan eski | Yeni işlem açılmaz. |
+| Likidite yetersiz | Alış-satış farkı geniş, hacim düşük veya emir defteri sığ olan çiftte işlem açılmaz. |
 
-Bot "OKX'e bağlanılamadı" derse: internet bağlantınızı kontrol edin ve tekrar başlatın.
+Bot kapatılıp açılsa bile durdurmalar hatırlanır (`data/risk_state.json`).
+
+Limitleri `config/settings.yaml` dosyasından değiştirebilirsiniz. **Sıkılaştırmak** hemen geçerli olur.
+**Gevşetmek** (örneğin %3'ü %5 yapmak) ancak Telegram'dan `/onayla` yazınca geçerli olur.
 
 ---
 
-## 6. Ayarları değiştirmek
+## 5. Jarvis bağlantısı
 
-Tüm ayarlar `config/settings.yaml` dosyasındadır. Not Defteri (Mac'te TextEdit) ile açabilirsiniz.
-Başında `#` olan satırlar açıklamadır. Bir değeri değiştirip kaydedin ve botu yeniden başlatın.
-Yanlış bir şey yazarsanız bot başlamaz ve neyin hatalı olduğunu söyler.
+Bot ilk açılışta `.env` dosyasına Jarvis için iki anahtar yazar:
+- `JARVIS_READ_KEY`: sadece okuma (durum, rapor, olaylar)
+- `JARVIS_CONTROL_KEY`: acil durumda **durdurma ve devam ettirme**
 
-Faz 1'de `LIVE_TRADING` (gerçek para) modu bilerek kapalıdır; seçilirse bot çalışmaz.
+Bu anahtarları sadece Jarvis'e verin. Jarvis'in yapabildikleri:
+- Durumu, kazanç raporunu ve olayları okumak ("X raporu" için)
+- Acil durumda yeni işlemleri durdurmak, kendi durdurmasını kaldırmak
+
+Jarvis'in **yapamadıkları:** emir göndermek, limit değiştirmek, sizin yaptığınız durdurmayı veya zarar limiti/acil durdurmayı kaldırmak.
+Jarvis botu her durdurduğunda size Telegram'dan haber gelir.
+
+Teknik ayrıntılar (Jarvis'i kuran kişi için): `README.md` → "Jarvis API".
 
 ---
 
-## 7. Dosyalar nerede?
-- `logs/bot.log`: teknik kayıtlar (bir sorun olursa bunu bana gönderin)
-- `data/status.json`: botun anlık durumu. Faz 5'te telefondan takip ekranı bu dosyayı okuyacak.
+## 6. Dosyalar nerede?
+- `.env`: gizli anahtarlar (kimseyle paylaşmayın)
+- `logs/bot.log`: teknik kayıtlar (bir sorun olursa bunu bana gönderin, `.env`'yi değil)
+- `data/events.jsonl`: tüm uyarı ve olayların kaydı
+- `data/risk_state.json`: durdurmaların ve limitlerin hafızası
+- `data/status.json`: botun anlık durumu

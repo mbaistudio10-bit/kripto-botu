@@ -1,6 +1,6 @@
 """The ExchangeAdapter port. Every exchange (OKX, Binance, Bybit, ...) implements it.
 
-Phase 1 is read-only on purpose: this interface has no order methods at all,
+The bot is read-only on purpose: this interface has no order methods at all,
 so no code path can place a real order. Trading gets its own port later.
 """
 

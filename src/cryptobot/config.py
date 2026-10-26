@@ -11,8 +11,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from cryptobot.domain.models import MarketType, Symbol, TradingMode
 
-# Modes this phase is allowed to run in. Anything else is refused at startup.
-PHASE1_ALLOWED_MODES = {TradingMode.READ_ONLY, TradingMode.PAPER_TRADING}
+# Modes the bot may run in today. LIVE_TRADING stays off until a later phase.
+ALLOWED_MODES = {TradingMode.READ_ONLY, TradingMode.PAPER_TRADING}
+
+# Fields of RiskLimits where a bigger number means more risk.
+RISK_LIMIT_FIELDS = (
+    "max_concurrent_positions",
+    "max_daily_loss_pct",
+    "max_weekly_loss_pct",
+    "max_total_drawdown_pct",
+    "max_risk_per_trade_pct",
+)
 
 
 class _Strict(BaseModel):
@@ -25,6 +34,12 @@ class RiskLimits(_Strict):
     max_weekly_loss_pct: Decimal = Field(gt=0, le=100)
     max_total_drawdown_pct: Decimal = Field(gt=0, le=100)
     max_risk_per_trade_pct: Decimal = Field(gt=0, le=100)
+    # Daily/weekly limits reset at local midnight / Monday. Turkey is UTC+3 all year.
+    reset_utc_offset_hours: int = Field(default=3, ge=-12, le=14)
+    # Fees + slippage assumed for one round trip, added to the stop distance.
+    assumed_round_trip_cost_bps: Decimal = Field(default=Decimal(20), ge=0)
+    # Send an early warning when a loss limit is this much used up (0.7 = 70%).
+    warn_at_fraction: Decimal = Field(default=Decimal("0.7"), gt=0, lt=1)
 
     @model_validator(mode="after")
     def _consistent(self) -> RiskLimits:
@@ -66,12 +81,42 @@ class LiquidityConfig(_Strict):
     max_spread_bps: Decimal = Field(gt=0)
     min_book_depth_try: Decimal = Field(ge=0)
     min_24h_volume_try: Decimal = Field(ge=0)
+    # Order book depth is counted within this distance of the mid price.
+    depth_band_bps: Decimal = Field(default=Decimal(50), gt=0)
+    # A pair must stay unfit this long before a Telegram warning is sent.
+    alert_after_seconds: float = Field(default=120, ge=0)
+
+
+class TelegramConfig(_Strict):
+    enabled: bool = True
+    # Holds TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID. Never commit it.
+    env_file: Path = Path(".env")
+    api_base_url: str = "https://api.telegram.org"
+    poll_timeout_seconds: int = Field(default=25, ge=1, le=50)
+    # The same warning is not repeated more often than this. KRITIK always goes out.
+    alert_cooldown_minutes: float = Field(default=30, ge=0)
+    # The same kind of system error is repeated at most this often.
+    error_cooldown_minutes: float = Field(default=5, ge=0)
+
+
+class JarvisConfig(_Strict):
+    """Local API for the owner's Jarvis assistant: read status + emergency stop/resume."""
+
+    enabled: bool = True
+    # 127.0.0.1 = only programs on this computer can connect.
+    host: str = "127.0.0.1"
+    port: int = Field(default=8765, ge=1024, le=65535)
 
 
 class StatusConfig(_Strict):
     print_every_seconds: float = Field(default=5, gt=0)
     status_file: Path = Path("data/status.json")
     log_file: Path = Path("logs/bot.log")
+    events_file: Path = Path("data/events.jsonl")
+    risk_state_file: Path = Path("data/risk_state.json")
+    # Startup grace: missing/old prices are not alerted during the first seconds.
+    alert_grace_seconds: float = Field(default=60, ge=0)
+    listing_check_minutes: float = Field(default=5, gt=0)
 
 
 class Settings(_Strict):
@@ -92,6 +137,8 @@ class Settings(_Strict):
     fx: FxConfig
     liquidity: LiquidityConfig
     status: StatusConfig
+    telegram: TelegramConfig = TelegramConfig()
+    jarvis: JarvisConfig = JarvisConfig()
 
     @field_validator("pairs", mode="before")
     @classmethod
@@ -102,9 +149,9 @@ class Settings(_Strict):
 
     @model_validator(mode="after")
     def _cross_checks(self) -> Settings:
-        if self.trading_mode not in PHASE1_ALLOWED_MODES:
+        if self.trading_mode not in ALLOWED_MODES:
             raise ValueError(
-                f"trading_mode {self.trading_mode.value} is not allowed in Phase 1; "
+                f"trading_mode {self.trading_mode.value} is not allowed yet; "
                 "use READ_ONLY or PAPER_TRADING"
             )
         if self.market_type is MarketType.SPOT and self.leverage != 1:
