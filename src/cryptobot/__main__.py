@@ -17,6 +17,7 @@ import aiohttp
 
 from cryptobot.api.jarvis import JarvisApi, JarvisWebhook, start_api
 from cryptobot.config import Settings, load_settings
+from cryptobot.domain.models import TradingMode
 from cryptobot.envfile import ensure_env_file, ensure_keys, load_env
 from cryptobot.events import ErrorEventHandler, EventLog, Level
 from cryptobot.exchanges.base import ExchangeAdapter, ExchangeError
@@ -25,14 +26,16 @@ from cryptobot.market_data.fx import FxRateService
 from cryptobot.market_data.service import MarketDataService, check_pairs
 from cryptobot.notify.telegram import TelegramApi, TelegramBot, parse_chat_id
 from cryptobot.report import build_report, period_start
-from cryptobot.risk.engine import FlatPortfolio, RiskEngine
+from cryptobot.paper.portfolio import PaperPortfolio, PaperStateError
+from cryptobot.paper.trader import PaperTrader
+from cryptobot.risk.engine import RiskEngine
 from cryptobot.status import build_snapshot, render_console, render_telegram, write_snapshot
 
 log = logging.getLogger("cryptobot")
 
 DISCLAIMER = (
     "Bu yazılım yatırım tavsiyesi değildir. Geçmiş performans gelecekteki getiriyi "
-    "garanti etmez. Faz 2: fiyat okur ve riskleri izler, hiçbir emir göndermez."
+    "garanti etmez. Faz 3: sahte parayla deneme işlemleri yapar, borsaya hiçbir emir göndermez."
 )
 
 
@@ -150,17 +153,35 @@ async def run(settings: Settings, once: bool) -> int:
 
         md = MarketDataService(adapter, pairs, settings.market_data)
         fx = FxRateService(md, settings.fx)
+        paper_error = None
+        try:
+            portfolio = PaperPortfolio(
+                settings.starting_capital, settings.starting_capital_currency, settings.risk_currency,
+                md, fx, None if once else settings.paper.state_file,
+            )
+        except PaperStateError as exc:
+            paper_error = exc
+            portfolio = PaperPortfolio(settings.starting_capital, settings.starting_capital_currency,
+                                       settings.risk_currency, md, fx, None)
         engine = RiskEngine(
             settings, md, fx,
-            portfolio=FlatPortfolio(settings.starting_capital),
+            portfolio=portfolio,
             events=events,
             state_path=None if once else settings.status.risk_state_file,
             live_pairs=pairs,
             started_at=started_at,
         )
 
+        if paper_error is not None:
+            log.error("paper account unreadable: %s", paper_error)
+            engine.stop("Deneme hesabı dosyası (data/paper_state.json) okunamadı")
+        elif portfolio.restored:
+            print(f"Deneme hesabı kaldığı yerden devam ediyor: {len(portfolio.positions)} açık pozisyon.")
+        trader = PaperTrader(portfolio, engine, md, events, settings.paper, settings.test_trigger,
+                             started_at=started_at)
+
         def snapshot() -> dict:
-            return build_snapshot(settings, md, fx, started_at, engine.evaluate())
+            return build_snapshot(settings, md, fx, started_at, engine.evaluate(), portfolio.snapshot())
 
         tasks = [asyncio.create_task(md.run(), name="market-data")]
         session = aiohttp.ClientSession()
@@ -196,6 +217,11 @@ async def run(settings: Settings, once: bool) -> int:
             if jarvis_hook is not None:
                 tasks.append(asyncio.create_task(jarvis_hook.run(), name="jarvis-webhook"))
             tasks.append(asyncio.create_task(_refresh_listing(adapter, settings, engine)))
+            if settings.trading_mode is TradingMode.PAPER_TRADING:
+                tasks.append(asyncio.create_task(trader.run(), name="paper-trader"))
+                if settings.test_trigger is not None and settings.test_trigger.enabled:
+                    print("DENEME TETİKLEYİCİ açık: bu bir strateji değildir, sadece deneme işlemleri "
+                          f"için her {settings.test_trigger.every_minutes:g} dakikada bir küçük bir alış dener.")
             if telegram is not None:
                 tasks.append(asyncio.create_task(telegram.run(
                     f"✅ Achilles: Kripto Botu başladı ({settings.trading_mode.value}). "

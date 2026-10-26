@@ -108,6 +108,42 @@ class JarvisConfig(_Strict):
     port: int = Field(default=8765, ge=1024, le=65535)
 
 
+class PaperConfig(_Strict):
+    """Simulated account: fills walk the real order book, nothing is sent to the exchange."""
+
+    state_file: Path = Path("data/paper_state.json")
+    # Exchange fee charged on every simulated buy and sell (10 = 0.10%, OKX spot taker).
+    fee_bps: Decimal = Field(default=Decimal(10), ge=0)
+    # One position may use at most this share of the account value.
+    max_position_pct: Decimal = Field(default=Decimal(45), gt=0, le=100)
+    # How often open positions are checked against their stop and target.
+    check_every_seconds: float = Field(default=2, gt=0)
+
+
+class PracticeTriggerConfig(_Strict):
+    """PLACEHOLDER entry rule so paper trading can be tested before Phase 4.
+
+    It is NOT a strategy and has no edge: every `every_minutes` it buys the next
+    allowed pair, with a fixed stop-loss, target and maximum holding time.
+    """
+
+    enabled: bool = True
+    pairs: list[Symbol] = Field(min_length=1)
+    first_after_minutes: float = Field(default=3, ge=0)
+    every_minutes: float = Field(default=30, gt=0)
+    retry_minutes: float = Field(default=5, gt=0)
+    stop_loss_pct: Decimal = Field(default=Decimal(1), gt=0, lt=50)
+    take_profit_pct: Decimal = Field(default=Decimal("1.5"), gt=0)
+    max_hold_minutes: float = Field(default=180, gt=0)
+
+    @field_validator("pairs", mode="before")
+    @classmethod
+    def _parse_pairs(cls, v: object) -> list[Symbol]:
+        if not isinstance(v, list):
+            raise ValueError("pairs must be a list like [BTC/TRY, ETH/TRY]")
+        return [Symbol.parse(p) if isinstance(p, str) else p for p in v]
+
+
 class StatusConfig(_Strict):
     print_every_seconds: float = Field(default=5, gt=0)
     status_file: Path = Path("data/status.json")
@@ -137,6 +173,8 @@ class Settings(_Strict):
     fx: FxConfig
     liquidity: LiquidityConfig
     status: StatusConfig
+    paper: PaperConfig = PaperConfig()
+    test_trigger: PracticeTriggerConfig | None = None
     telegram: TelegramConfig = TelegramConfig()
     jarvis: JarvisConfig = JarvisConfig()
 
@@ -163,6 +201,10 @@ class Settings(_Strict):
             missing = {pair.base, pair.quote} - assets
             if missing:
                 raise ValueError(f"{pair} uses assets not in supported_assets: {sorted(missing)}")
+        if self.test_trigger is not None:
+            unknown = [str(p) for p in self.test_trigger.pairs if p not in self.pairs]
+            if unknown:
+                raise ValueError(f"test_trigger pairs must also be in pairs: {unknown}")
         for ccy in (self.display_currency, self.risk_currency, self.starting_capital_currency):
             if ccy not in assets:
                 raise ValueError(f"currency {ccy} is not in supported_assets")

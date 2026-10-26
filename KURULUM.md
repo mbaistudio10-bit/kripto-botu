@@ -1,7 +1,7 @@
-# Kripto Botu: Kurulum ve Kullanım Rehberi (Faz 2)
+# Kripto Botu: Kurulum ve Kullanım Rehberi (Faz 3)
 
 > **Önemli:** Bu yazılım yatırım tavsiyesi değildir. Geçmiş performans gelecekteki getiriyi garanti etmez.
-> Bot şu an **gerçek emir göndermez**. Fiyatları okur, riskleri izler ve size Telegram'dan (Achilles) haber verir.
+> Bot şu an **gerçek emir göndermez**. Sahte parayla (10.000 TL) deneme işlemleri yapar, riskleri izler ve size Telegram'dan (Achilles) haber verir.
 
 Kodlama bilgisi gerekmez. Python kurmanıza da gerek yok.
 
@@ -69,7 +69,7 @@ Bot sadece **sizin** Telegram hesabınızdan gelen komutlara cevap verir. Başka
 ### 3d. Size ne zaman mesaj gelir?
 - 🔴 **KRİTİK:** günlük/haftalık zarar limiti doldu, acil durdurma, bot çöktü, açık pozisyonu olan çift borsadan kalktı
 - 🟠 **UYARI:** limite yaklaşılıyor, kur eski, bir çiftin likiditesi yetersiz, sistem hatası, biri botu durdurdu
-- 🛒 **Alış**, 💰 **Satış**, 🛑 **Stop-loss**: her işlemde anında (işlemler Faz 3'teki deneme modunda başlayacak)
+- 🛒 **Alış**, 💰 **Satış**, 🛑 **Stop-loss**: her deneme işleminde anında
 - Aynı uyarı 30 dakikada bir defadan fazla gelmez. KRİTİK ve işlem mesajları her zaman gelir.
 
 ---
@@ -110,9 +110,38 @@ Teknik ayrıntılar (Jarvis'i kuran kişi için): `README.md` → "Jarvis API".
 
 ---
 
-## 6. Dosyalar nerede?
+## 6. Deneme işlemleri (Faz 3)
+
+Bot **sahte parayla** çalışan bir deneme hesabı tutar (başlangıç: 10.000 TL). Borsaya hiçbir emir gitmez.
+Alış ve satışlar OKX'teki gerçek fiyat ve emir defterine göre, komisyon (%0,10) dahil hesaplanır.
+
+**Ne zaman alış yapar?** Şimdilik bir **deneme tetikleyicisi** var. Bu bir strateji **değildir**, kazanç beklentisi yoktur.
+Tek amacı, sistemin işlem yaptığını, mesajları ve risk kurallarını görebilmenizdir:
+- Bot açıldıktan 3 dakika sonra, sonra her 30 dakikada bir, BTC/TRY ve ETH/TRY arasında sırayla küçük bir alış dener.
+- Her alış, risk motorunun onayından geçer (işlem başına en fazla %1 risk, en fazla 2 pozisyon, kur ve likidite kontrolü).
+- Fiyat **%1 düşerse** stop-loss ile satar, **%1,5 yükselirse** kârla satar, **3 saat** dolarsa satar.
+- Risk kuralı izin vermezse (örneğin emir defteri sığ) alış yapmaz ve size nedenini yazar (en fazla 30 dakikada bir).
+
+Gerçek strateji Faz 4'te gelecek. Deneme tetikleyicisini kapatmak için `config/settings.yaml` içinde `test_trigger` → `enabled: false`.
+
+**Ne görürsünüz?**
+- Telegram'a 🛒 ALIŞ (deneme), 💰 SATIŞ (deneme), 🛑 STOP-LOSS mesajları; kazanç hem TL hem USD olarak.
+- `/durum`: deneme hesabının değeri (TL ve USD), açık pozisyonlar, anlık kâr/zarar.
+- `/rapor`: kapanan işlemlerin özeti.
+- `/durdur`: yeni alışları durdurur. **Açık pozisyonların stop-loss ve hedefi çalışmaya devam eder.**
+- Zirveden %10 düşüş olursa bot tüm deneme pozisyonlarını kendisi kapatır.
+
+USD kazancı, alış ile satış arasındaki dolar kuru değişimini de içerir. Bu yüzden TL'de kâr, USD'de daha az görünebilir.
+
+Hesap bot kapatılıp açılınca kaldığı yerden devam eder (`data/paper_state.json`).
+Deneme hesabını sıfırdan başlatmak isterseniz: botu kapatın, bu dosyayı silin, botu açın.
+
+---
+
+## 7. Dosyalar nerede?
 - `.env`: gizli anahtarlar (kimseyle paylaşmayın)
 - `logs/bot.log`: teknik kayıtlar (bir sorun olursa bunu bana gönderin, `.env`'yi değil)
 - `data/events.jsonl`: tüm uyarı ve olayların kaydı
 - `data/risk_state.json`: durdurmaların ve limitlerin hafızası
 - `data/status.json`: botun anlık durumu
+- `data/paper_state.json`: deneme hesabının bakiyesi ve açık pozisyonları

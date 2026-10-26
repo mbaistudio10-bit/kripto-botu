@@ -1,8 +1,7 @@
 """Short profit / coins / trades summary, shaped for the owner's Telegram "X report".
 
-Trades are read from the event log ("trade_closed" events). Paper trading
-(Phase 3) emits them with data: symbol, pnl_try, pnl_usd. Until then the
-report is simply empty. Jarvis' read-only API (Phase 5) serves the same dict.
+Trades are read from the event log ("trade_closed" / "stop_loss_hit" events,
+emitted by the paper trader with data: symbol, pnl_try, pnl_usd). Jarvis' read-only API (Phase 5) serves the same dict.
 """
 
 from __future__ import annotations

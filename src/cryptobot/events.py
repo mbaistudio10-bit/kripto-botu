@@ -131,7 +131,7 @@ class EventLog:
 
 
 # ---------------------------------------------------------------------------
-# Instant notifications. Paper trading (Phase 3) calls these on every fill;
+# Instant notifications. Paper trading calls these on every fill;
 # Telegram (Achilles) pushes each one immediately, never rate limited.
 
 TRADE_OPENED = "trade_opened"
@@ -143,32 +143,37 @@ INSTANT_KINDS = frozenset({TRADE_OPENED, TRADE_CLOSED, STOP_LOSS_HIT})
 
 def emit_trade_opened(
     events: EventLog, *, trade_id: str, symbol: str, quantity: Decimal, price: Decimal,
-    value_try: Decimal, stop_price: Decimal | None, paper: bool = True,
+    value_try: Decimal, stop_price: Decimal | None, target_price: Decimal | None = None,
+    paper: bool = True,
 ) -> Event:
     tag = " (deneme)" if paper else ""
     stop = f"\nZarar-kes (stop): {fmt_num(stop_price)}" if stop_price is not None else ""
+    target = f"\nHedef: {fmt_num(target_price)}" if target_price is not None else ""
     return events.emit(
         Level.BILGI, TRADE_OPENED,
         f"🛒 ALIŞ{tag}: {symbol}\nMiktar: {quantity.normalize():f} @ {fmt_num(price)}\n"
-        f"Tutar: {fmt_try(value_try)}{stop}",
+        f"Tutar: {fmt_try(value_try)}{stop}{target}",
         notify=True, key=trade_id, trade_id=trade_id, symbol=symbol, side="BUY",
-        quantity=quantity, price=price, value_try=value_try, stop_price=stop_price, paper=paper,
+        quantity=quantity, price=price, value_try=value_try, stop_price=stop_price,
+        target_price=target_price, paper=paper,
     )
 
 
 def emit_trade_closed(
     events: EventLog, *, trade_id: str, symbol: str, quantity: Decimal, price: Decimal,
-    pnl_try: Decimal, pnl_usd: Decimal, reason: str = "satış", paper: bool = True,
+    pnl_try: Decimal, pnl_usd: Decimal, reason: str = "satış", note: str | None = None,
+    paper: bool = True,
 ) -> Event:
-    """reason: 'satış' (normal exit), 'stop-loss' or 'acil kapatma'."""
+    """reason: 'satış' (normal exit), 'stop-loss' or 'acil kapatma'. note: why, in Turkish."""
     tag = " (deneme)" if paper else ""
     stop = reason == "stop-loss"
     head = f"🛑 STOP-LOSS ÇALIŞTI{tag}: {symbol}" if stop else f"💰 SATIŞ{tag}: {symbol}"
     sign = "+" if pnl_try >= 0 else ""
+    why = f"\nSebep: {note}" if note else ""
     return events.emit(
         Level.UYARI if stop else Level.BILGI, STOP_LOSS_HIT if stop else TRADE_CLOSED,
         f"{head}\nMiktar: {quantity.normalize():f} @ {fmt_num(price)}\n"
-        f"Sonuç: {sign}{fmt_try(pnl_try)} (≈ {pnl_usd:+.2f} USD)",
+        f"Sonuç: {sign}{fmt_try(pnl_try)} (≈ {pnl_usd:+.2f} USD){why}",
         notify=True, key=trade_id, trade_id=trade_id, symbol=symbol, side="SELL",
         quantity=quantity, price=price, pnl_try=pnl_try, pnl_usd=pnl_usd, reason=reason,
         paper=paper,
