@@ -5,8 +5,8 @@
 # =====================================================================
 
 # --- Mode ------------------------------------------------------------
-# Phase 1 only supports READ_ONLY and PAPER_TRADING. No real orders are
-# ever sent in this phase; LIVE_TRADING is rejected at startup.
+# Only READ_ONLY and PAPER_TRADING are allowed for now. No real orders are
+# ever sent; LIVE_TRADING is rejected at startup.
 trading_mode: PAPER_TRADING
 market_type: SPOT
 leverage: 1
@@ -28,13 +28,18 @@ pairs:
 starting_capital: 10000
 starting_capital_currency: TRY
 
-# --- Risk limits (enforced from Phase 2 on; validated now) -----------
+# --- Risk limits -----------------------------------------------------
+# Making a limit STRICTER (smaller) applies at once. Making it LOOSER
+# (bigger) only applies after you send /onayla in Telegram.
 risk:
   max_concurrent_positions: 2
-  max_daily_loss_pct: 3
-  max_weekly_loss_pct: 6
-  max_total_drawdown_pct: 10
-  max_risk_per_trade_pct: 1
+  max_daily_loss_pct: 3        # hit -> no new trades until midnight (Turkey time)
+  max_weekly_loss_pct: 6       # hit -> no new trades until Monday
+  max_total_drawdown_pct: 10   # hit -> emergency stop, needs "/devam ONAY"
+  max_risk_per_trade_pct: 1    # loss at the stop price, as % of the account
+  reset_utc_offset_hours: 3    # Turkey = UTC+3
+  assumed_round_trip_cost_bps: 20  # fees + slippage added to each trade's risk
+  warn_at_fraction: 0.7        # early warning at 70% of a loss limit
 
 # --- Exchange --------------------------------------------------------
 exchange:
@@ -63,11 +68,14 @@ fx:
   # Spec rule: if FX is older than 5 minutes, no new positions.
   max_age_seconds: 300
 
-# --- Liquidity thresholds for TRY pairs (used from Phase 2) ----------
+# --- Liquidity thresholds for TRY pairs --------------------------------
+# A pair below these values is not traded (TRY pairs can be thin).
 liquidity:
-  max_spread_bps: 30
-  min_book_depth_try: 250000
-  min_24h_volume_try: 5000000
+  max_spread_bps: 30            # max gap between buy and sell price (30 = 0.30%)
+  min_book_depth_try: 250000    # min order book value on each side, within depth_band_bps
+  min_24h_volume_try: 5000000   # min traded value in the last 24 hours
+  depth_band_bps: 50
+  alert_after_seconds: 120      # warn only if a pair stays unfit this long
 
 # --- Status output ---------------------------------------------------
 status:
@@ -75,3 +83,26 @@ status:
   # A JSON snapshot written here; the phone dashboard (Phase 5) reads it.
   status_file: data/status.json
   log_file: logs/bot.log
+  events_file: data/events.jsonl      # every alert/halt/trade, one per line
+  risk_state_file: data/risk_state.json  # halts survive a restart
+  alert_grace_seconds: 60
+  listing_check_minutes: 5            # re-check that pairs are still listed
+
+# --- Telegram (bot name: Achilles) -------------------------------------
+# The token and your chat id go in the .env file next to the program,
+# never in this file.
+telegram:
+  enabled: true
+  env_file: .env
+  api_base_url: https://api.telegram.org
+  poll_timeout_seconds: 25
+  alert_cooldown_minutes: 30   # same warning at most every 30 min (KRİTİK and trades: always)
+  error_cooldown_minutes: 5    # same system error at most every 5 min
+
+# --- Jarvis link -----------------------------------------------------
+# Jarvis can read status/report and do an emergency stop/resume.
+# It can never place orders or change limits. Keys are created in .env.
+jarvis:
+  enabled: true
+  host: 127.0.0.1   # only programs on this computer can connect
+  port: 8765

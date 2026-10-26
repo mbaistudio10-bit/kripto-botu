@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -21,7 +21,11 @@ def _num(d: Decimal | None, places: int = 2) -> str | None:
 
 
 def build_snapshot(
-    settings: Settings, md: MarketDataService, fx: FxRateService, started_at: datetime
+    settings: Settings,
+    md: MarketDataService,
+    fx: FxRateService,
+    started_at: datetime,
+    risk: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     rate = fx.usd_try()
@@ -48,6 +52,8 @@ def build_snapshot(
                 "ask_depth_50bps": _num(book.depth_quote("ask", _LIQUIDITY_BAND_BPS), 0),
                 "imbalance": _num(book.imbalance, 3),
             }
+        if risk is not None and str(sym) in risk["pairs"]:
+            row |= risk["pairs"][str(sym)]
         pairs.append(row)
     return {
         "time": now.isoformat(timespec="seconds"),
@@ -57,7 +63,8 @@ def build_snapshot(
         "fx": None
         if rate is None
         else {"usd_try": _num(rate.rate, 4), "source": rate.source, "fresh": fx.is_fresh(now)},
-        "new_positions_allowed": fx.is_fresh(now),
+        "new_positions_allowed": risk["new_positions_allowed"] if risk else fx.is_fresh(now),
+        "risk": risk,
         "pairs": pairs,
         "errors": md.errors,
         "last_error": md.last_error,
@@ -93,6 +100,64 @@ def render_console(snapshot: dict[str, Any]) -> str:
             f"{p['pair']:<10}{p['last']:>16}{(p['last_usd'] or '-'):>12}"
             f"{p['change_24h_pct']:>8}{p['spread_bps']:>13}  {state}"
         )
+    risk = snapshot.get("risk")
+    if risk is not None:
+        if risk["halts"]:
+            lines.append("RİSK: DURDURULDU -> " + " | ".join(h["message"] for h in risk["halts"]))
+        elif risk["new_positions_allowed"]:
+            lines.append("Risk: normal, yeni işlem açılabilir")
+        else:
+            lines.append("Risk: şu an yeni işlem açılmaz (kur eski veya sadece-izleme modu)")
+        lines.append(
+            f"Zarar bugün %{risk['daily_loss_pct'] or '0.00'} / %{risk['limits']['max_daily_loss_pct']}  "
+            f"hafta %{risk['weekly_loss_pct'] or '0.00'} / %{risk['limits']['max_weekly_loss_pct']}  "
+            f"zirveden %{risk['drawdown_pct'] or '0.00'} / %{risk['limits']['max_total_drawdown_pct']}"
+        )
+        for p in snapshot["pairs"]:
+            if p.get("problems"):
+                lines.append(f"  {p['pair']} işleme uygun değil: " + "; ".join(p["problems"]))
     if snapshot["errors"]:
         lines.append(f"Uyarı: {snapshot['errors']} bağlantı hatası oldu. Son: {snapshot['last_error']}")
+    return "\n".join(lines)
+
+
+def _tr_num(text: str | None, places: int = 2) -> str:
+    if text is None:
+        return "-"
+    d = Decimal(text)
+    return f"{d:,.{places}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def render_telegram(snapshot: dict[str, Any], utc_offset_hours: int = 3) -> str:
+    """Short status for the /durum command."""
+    risk = snapshot.get("risk") or {}
+    mode = snapshot["mode"]
+    mode_tr = {"PAPER_TRADING": "kağıt üzerinde deneme, gerçek para yok",
+               "READ_ONLY": "sadece izleme"}.get(mode, mode)
+    lines = ["📊 Kripto Botu durumu", f"Mod: {mode} ({mode_tr})"]
+    if risk.get("halts"):
+        lines.append("Durum: ⛔ " + " | ".join(h["message"] for h in risk["halts"]))
+    elif snapshot["new_positions_allowed"]:
+        lines.append("Durum: ✅ normal, yeni işlem açılabilir")
+    else:
+        lines.append("Durum: ⏸ şu an yeni işlem açılmaz (kur verisi eski)")
+    if risk:
+        lines.append(
+            f"Bakiye: {_tr_num(risk.get('equity'))} TL | bugünkü zarar %{_tr_num(risk.get('daily_loss_pct'))}"
+        )
+        lines.append(f"Açık pozisyon: {risk['open_positions']} / {risk['limits']['max_concurrent_positions']}")
+    fx = snapshot["fx"]
+    if fx is None:
+        lines.append("USD/TRY: henüz yok")
+    else:
+        lines.append(f"USD/TRY: {_tr_num(fx['usd_try'], 2)} ({'güncel' if fx['fresh'] else 'ESKİ'})")
+    lines.append("Fiyatlar:")
+    for p in snapshot["pairs"]:
+        if "last" not in p:
+            lines.append(f"• {p['pair']}: veri bekleniyor")
+            continue
+        mark = "✅" if p.get("tradable", True) else "⚠️ " + "; ".join(p.get("problems", []))
+        lines.append(f"• {p['pair']}: {_tr_num(p['last'])} ({_tr_num(p['change_24h_pct'])}%) {mark}")
+    local = datetime.fromisoformat(snapshot["time"]) + timedelta(hours=utc_offset_hours)
+    lines.append(f"Saat: {local:%d.%m.%Y %H:%M} (TR)")
     return "\n".join(lines)
