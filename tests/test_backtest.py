@@ -133,11 +133,15 @@ def test_variants_are_fixed_and_start_with_current_settings(settings: Settings) 
     from cryptobot.backtest.variants import variants
 
     vs = variants(settings.strategy, settings.exits)
-    assert [v.key for v in vs] == ["current", "trend_4h", "trend_1d"]
-    assert vs[0].strategy == settings.strategy
-    assert (vs[1].strategy.bar_minutes, vs[1].strategy.trend_bar_minutes) == (240, 1440)
+    # The owner runs 4-hour candles now, so that fixed set is not repeated.
+    assert [v.key for v in vs] == ["current", "trend_1h", "trend_1d"]
+    assert vs[0].strategy == settings.strategy and "4 saatlik mum, günlük trend" in vs[0].label
+    assert (vs[1].strategy.bar_minutes, vs[1].strategy.trend_bar_minutes) == (60, 240)
+    assert (vs[1].exits.stale_after_bars, vs[1].exits.max_hold_bars) == (48, 240)
     assert (vs[2].strategy.bar_minutes, vs[2].strategy.trend_bar_minutes) == (1440, 1440)
     assert len(variants(settings.strategy, settings.exits, compare=False)) == 1
+    hourly = StrategyConfig(bar_minutes=60, trend_bar_minutes=240)
+    assert [v.key for v in variants(hourly, settings.exits)] == ["current", "trend_4h", "trend_1d"]
 
 
 def test_daily_variant_runs_on_resampled_candles(settings: Settings) -> None:
@@ -173,7 +177,7 @@ def test_verdict_needs_unseen_profit_and_enough_trades(settings: Settings) -> No
 
 
 def test_real_strategy_end_to_end_and_turkish_report(settings: Settings) -> None:
-    strat = TrendBreakoutStrategy(settings.strategy)
+    strat = TrendBreakoutStrategy(StrategyConfig(bar_minutes=60, trend_bar_minutes=240))
     series = {BTC: random_walk(4000, seed=3), ETH: random_walk(4000, seed=4, start_price=120_000)}
     start = series[BTC][strat.warmup_bars].ts
     end = series[BTC][-1].ts + H
@@ -205,7 +209,9 @@ async def test_load_history_pages_back_and_uses_cache(tmp_path) -> None:
 async def test_run_backtest_writes_report(settings: Settings, tmp_path) -> None:
     n = 3000
     data = {"BTC/TRY": random_walk(n, seed=5), "ETH/TRY": random_walk(n, seed=6, start_price=120_000),
-            "USDT/TRY": random_walk(n, seed=8, vol=0.001, start_price=40.0)}
+            "USDT/TRY": random_walk(n, seed=8, vol=0.001, start_price=40.0),
+            "BTC/USDT": random_walk(n, seed=5, start_price=90_000),
+            "ETH/USDT": random_walk(n, seed=6, start_price=3_000)}
     now = data["BTC/TRY"][-1].ts + H
     s = settings.model_copy(update={"backtest": settings.backtest.model_copy(
         update={"cache_dir": tmp_path / "c", "report_file": tmp_path / "r.txt"})})
@@ -213,8 +219,10 @@ async def test_run_backtest_writes_report(settings: Settings, tmp_path) -> None:
     assert code == 0, text
     full = (tmp_path / "r.txt").read_text(encoding="utf-8")
     assert full.startswith("📈") and "AYRINTILAR" in full and "Dolar bazında" in full
-    assert "3 kural karşılaştırması" in text and "şu anki ayarlar" in text
-    assert "Günlük mum" in text and "4 saatlik mum" in text
+    assert "kural karşılaştırması" in text and "şu anki ayarlar" in text
+    assert "Günlük mum" in text and "4 saatlik mum" in text and "1 saatlik mum" in text
+    assert text.count("dolar çiftleri (BTC/USDT, ETH/USDT)") == 3  # every rule set, also in dollars
+    assert "Hesap dolar (USDT) olarak tutuldu" in full and "TL bazında" in full
     assert "sadece dolar (USDT) tutmak" in text and "garanti etmez" in text
     assert len(text) < 4000  # one Telegram message
 
@@ -228,3 +236,47 @@ async def test_run_backtest_without_data(settings: Settings, tmp_path) -> None:
 def test_default_strategy_config_matches_settings_file(settings: Settings) -> None:
     assert settings.strategy == StrategyConfig()
     assert settings.exits == ExitConfig()
+
+
+def test_usdt_account_keeps_idle_money_in_dollars(settings: Settings) -> None:
+    btc_usdt = Symbol("BTC", "USDT")
+    n = 48
+    flat_c = from_closes([100.0] * n, spread=0.0)
+    fx = from_closes([40.0 + 4.0 * i / (n - 1) for i in range(n)], spread=0.0)  # USD/TRY 40 -> 44
+    end = T0 + n * H
+    usd = Backtester(StubStrategy(set()), settings.exits, settings.risk, settings.paper, 10, 10_000.0,
+                     quote="USDT").run({btc_usdt: flat_c}, T0, end, fx=fx)
+    tl = bt(settings, StubStrategy(set())).run({BTC: flat_c}, T0, end, fx=fx)
+    # No trades: dollars keep their value, so the TL value rises with the dollar.
+    assert usd.quote == "USDT" and usd.start_equity == pytest.approx(10_000 / 40)
+    assert metrics(usd).usd_return_pct == pytest.approx(0)
+    assert metrics(usd).total_return_pct == pytest.approx(10)
+    # Idle TL stays TL: worth less in dollars.
+    assert metrics(tl).total_return_pct == pytest.approx(0)
+    assert metrics(tl).usd_return_pct == pytest.approx((40 / 44 - 1) * 100)
+    # Trades on a dollar pair are sized in USDT with the same risk rules.
+    traded = Backtester(StubStrategy({2}, stop_dist=5.0), settings.exits, settings.risk, settings.paper, 10,
+                        10_000.0, quote="USDT").run({btc_usdt: flat_c}, T0, end, fx=fx)
+    assert traded.trades and traded.trades[0].quantity * 100 <= 250 * 0.45 + 1e-6
+    text = render_details(usd, traded)
+    assert "Hesap dolar (USDT) olarak tutuldu" in text and "USDT" in text
+    with pytest.raises(ValueError):
+        Backtester(StubStrategy(set()), settings.exits, settings.risk, settings.paper, 10, 10_000.0,
+                   quote="USDT").run({btc_usdt: flat_c}, T0, end)
+
+
+def test_dollar_account_must_make_dollars_to_pass(settings: Settings) -> None:
+    from cryptobot.backtest.engine import BtResult, BtTrade
+    from cryptobot.backtest.variants import variants
+
+    v = variants(settings.strategy, settings.exits)[0]
+
+    def result(usd_ret: float) -> BtResult:
+        # The dollar rose 20% against TL, so TL looks good even when dollars were lost.
+        r = BtResult("x", T0, T0 + H, 250.0, 250.0 * (1 + usd_ret), "USDT", usd_start=250.0,
+                     usd_end=250.0 * (1 + usd_ret), tl_start=10_000.0, tl_end=10_000.0 * (1 + usd_ret) * 1.2)
+        r.trades = [BtTrade(BTC, T0, T0, 1, 1, 1, 1.0 if i % 3 else -0.5, 0, 0, "", "") for i in range(20)]
+        return r
+
+    assert "Hiçbir kural" in comparison_verdict([(v, result(-0.05), result(-0.05))])
+    assert "her iki dönemde" in comparison_verdict([(v, result(0.05), result(0.05))])

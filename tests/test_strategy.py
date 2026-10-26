@@ -13,6 +13,8 @@ from cryptobot.strategy.trend import TrendBreakoutStrategy
 from tests.candles_util import H, T0, from_closes, random_walk
 
 BTC = Symbol("BTC", "TRY")
+# The test candles are 1 hour long (H); the live default is 4-hour candles.
+HOURLY = StrategyConfig(bar_minutes=60, trend_bar_minutes=240)
 
 
 def test_ema_is_seeded_with_sma_and_has_warmup() -> None:
@@ -49,7 +51,7 @@ def test_resample_tolerates_missing_hours() -> None:
 
 
 def test_no_look_ahead_full_history_equals_truncated_history() -> None:
-    strat = TrendBreakoutStrategy(StrategyConfig())
+    strat = TrendBreakoutStrategy(HOURLY)
     candles = random_walk(1500, seed=7)
     full = strat.prepare(BTC, candles)
     longs = 0
@@ -76,7 +78,7 @@ def _uptrend_breakout() -> list[Candle]:
 
 
 def test_breakout_in_uptrend_is_long_with_atr_stop() -> None:
-    strat = TrendBreakoutStrategy(StrategyConfig())
+    strat = TrendBreakoutStrategy(HOURLY)
     candles = _uptrend_breakout()
     sig = strat.generate_signal(MarketState(BTC, candles, candles[-1].ts), PortfolioState(), RiskState())
     assert sig.direction is Direction.LONG, sig.rationale
@@ -88,7 +90,7 @@ def test_breakout_in_uptrend_is_long_with_atr_stop() -> None:
 
 
 def test_downtrend_and_open_position_and_halts_are_flat() -> None:
-    strat = TrendBreakoutStrategy(StrategyConfig())
+    strat = TrendBreakoutStrategy(HOURLY)
     down = from_closes([1000 * 0.998**i for i in range(700)] + [1000 * 0.998**699 * 1.03])
     sig = strat.generate_signal(MarketState(BTC, down, down[-1].ts), PortfolioState(), RiskState())
     assert sig.direction is Direction.FLAT and "trend" in sig.rationale
@@ -100,7 +102,7 @@ def test_downtrend_and_open_position_and_halts_are_flat() -> None:
 
 
 def test_not_enough_history_is_flat() -> None:
-    strat = TrendBreakoutStrategy(StrategyConfig())
+    strat = TrendBreakoutStrategy(HOURLY)
     short = from_closes([100.0 + i for i in range(50)])
     sig = strat.generate_signal(MarketState(BTC, short, short[-1].ts), PortfolioState(), RiskState())
     assert sig.direction is Direction.FLAT and "geçmiş" in sig.rationale
@@ -151,6 +153,10 @@ def test_time_and_trend_exits() -> None:
 
 
 def test_warmup_covers_trend_ema() -> None:
-    strat = TrendBreakoutStrategy(StrategyConfig())
+    strat = TrendBreakoutStrategy(HOURLY)
     assert strat.warmup_bars >= 50 * 4
     assert strat.bar == timedelta(hours=1)
+    default = TrendBreakoutStrategy(StrategyConfig())  # 4-hour candles, daily trend
+    assert default.bar == timedelta(hours=4)
+    assert default.warmup_bars >= 51 * 6
+    assert default.warmup_bars <= StrategyConfig().history_bars  # live bot loads enough history

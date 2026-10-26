@@ -8,6 +8,9 @@ Realism rules:
   * Costs: exchange fee on every buy and sell, plus slippage (worse price) per side.
   * Stops: if a bar's low touches the stop, the fill is the stop price, or the bar's
     open if it already gapped below it, minus slippage.
+  * Account currency: TRY pairs keep idle money in TRY. With USDT pairs the
+    same starting TL amount is converted to USDT at the first bar, so idle money
+    is held in dollars; results are reported in both TL and USD.
   * Risk rules mirror the live RiskEngine: risk per trade, max open positions,
     max share of the account per position, daily / weekly loss halts (Turkey time)
     and the drawdown emergency stop (closes everything). After the emergency stop
@@ -38,7 +41,7 @@ class BtTrade:
     entry_price: float
     exit_price: float
     quantity: float
-    pnl: float  # in the quote currency (TRY), after all costs
+    pnl: float  # in the quote currency (TRY or USDT), after all costs
     fees: float
     r_multiple: float  # pnl / money at risk at entry
     reason: str
@@ -50,8 +53,9 @@ class BtResult:
     label: str
     start: datetime
     end: datetime
-    start_equity: float
+    start_equity: float  # in the quote currency
     end_equity: float
+    quote: str = "TRY"
     trades: list[BtTrade] = field(default_factory=list)
     equity_curve: list[tuple[datetime, float]] = field(default_factory=list)
     halts: list[str] = field(default_factory=list)
@@ -59,6 +63,8 @@ class BtResult:
     exposure_pct: float = 0.0
     usd_start: float | None = None
     usd_end: float | None = None
+    tl_start: float | None = None
+    tl_end: float | None = None
     signals: int = 0
     skipped: int = 0  # signals not taken (limits, cash, position cap)
     drawdown_halts: int = 0
@@ -79,6 +85,7 @@ class Backtester:
     def __init__(
         self, strategy: TrendBreakoutStrategy, exits: ExitConfig, limits: RiskLimits,
         paper: PaperConfig, slippage_bps: float, capital: float, drawdown_pause_days: float = 7,
+        quote: str = "TRY",
     ) -> None:
         self.strategy = strategy
         self.exits = exits
@@ -86,7 +93,8 @@ class Backtester:
         self.fee = float(paper.fee_bps) / 10_000
         self.max_pos_frac = float(paper.max_position_pct) / 100
         self.slip = slippage_bps / 10_000
-        self.capital = capital
+        self.capital = capital  # always in TL
+        self.quote = quote  # "TRY", or "USDT" (needs the USDT/TRY rate)
         self.dd_pause = timedelta(days=drawdown_pause_days) if drawdown_pause_days > 0 else None
 
     def run(
@@ -99,17 +107,24 @@ class Backtester:
         prepared = {s: strat.prepare(s, c) for s, c in series.items() if c}
         index = {s: {c.ts: i for i, c in enumerate(p.candles)} for s, p in prepared.items()}
         timeline = sorted({ts for idx in index.values() for ts in idx if start <= ts < end})
-        res = BtResult(label, start, end, self.capital, self.capital)
+        r0 = _rate_at(fx, start) if fx else None
+        if self.quote == "TRY":
+            capital, min_order = self.capital, _MIN_ORDER_TRY
+        elif r0:
+            capital, min_order = self.capital / r0, _MIN_ORDER_TRY / r0
+        else:
+            raise ValueError("a USDT account needs the USDT/TRY rate (fx)")
+        res = BtResult(label, start, end, capital, capital, self.quote)
         if not timeline:
             return res
 
-        cash = self.capital
+        cash = capital
         positions: dict[Symbol, _Pos] = {}
         pending: dict[Symbol, Signal] = {}
         last_close: dict[Symbol, float] = {}
         offset = timedelta(hours=lim.reset_utc_offset_hours)
         day_key = week_key = None
-        day_start = week_start = peak = self.capital
+        day_start = week_start = peak = capital
         daily_halt = weekly_halt = dd_halt = False
         dd_resume_at: datetime | None = None
         bars_in_market = 0
@@ -145,7 +160,7 @@ class Backtester:
             qty = min(eq * float(lim.max_risk_per_trade_pct) / 100 / per_unit,
                       eq * self.max_pos_frac / price,
                       cash * 0.98 / (price * (1 + self.fee)))
-            if qty * price < _MIN_ORDER_TRY:
+            if qty * price < min_order:
                 res.skipped += 1
                 return
             fee = qty * price * self.fee
@@ -229,10 +244,15 @@ class Backtester:
         res.exposure_pct = bars_in_market / len(timeline) * 100
         for sym, o in first_open.items():
             res.buy_hold_pct[sym] = (last_close[sym] / o - 1) * 100
-        if fx:
-            r0, r1 = _rate_at(fx, start), _rate_at(fx, last_ts)
+        r1 = _rate_at(fx, last_ts) if fx else None
+        if self.quote == "TRY":
+            res.tl_start, res.tl_end = capital, res.end_equity
             if r0 and r1:
-                res.usd_start, res.usd_end = self.capital / r0, res.end_equity / r1
+                res.usd_start, res.usd_end = capital / r0, res.end_equity / r1
+        else:
+            res.usd_start, res.usd_end = capital, res.end_equity
+            res.tl_start = self.capital
+            res.tl_end = res.end_equity * r1 if r1 else None
         return res
 
 
