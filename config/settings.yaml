@@ -1,0 +1,77 @@
+# =====================================================================
+# Kripto Botu - main settings file
+# Lines starting with "#" are comments (explanations). The bot ignores them.
+# Change a value, save the file, restart the bot.
+# =====================================================================
+
+# --- Mode ------------------------------------------------------------
+# Phase 1 only supports READ_ONLY and PAPER_TRADING. No real orders are
+# ever sent in this phase; LIVE_TRADING is rejected at startup.
+trading_mode: PAPER_TRADING
+market_type: SPOT
+leverage: 1
+
+# --- Currencies ------------------------------------------------------
+display_currency: TRY
+risk_currency: TRY
+internal_valuation_currency: USD
+primary_quote_currencies: [TRY, USDT]
+supported_assets: [TRY, USDT, USD, BTC, ETH]
+
+# --- Pairs -----------------------------------------------------------
+pairs:
+  - BTC/TRY
+  - ETH/TRY
+  - USDT/TRY
+
+# --- Paper account ---------------------------------------------------
+starting_capital: 10000
+starting_capital_currency: TRY
+
+# --- Risk limits (enforced from Phase 2 on; validated now) -----------
+risk:
+  max_concurrent_positions: 2
+  max_daily_loss_pct: 3
+  max_weekly_loss_pct: 6
+  max_total_drawdown_pct: 10
+  max_risk_per_trade_pct: 1
+
+# --- Exchange --------------------------------------------------------
+exchange:
+  name: okx
+  # Public market data needs no API key. If your account is on OKX TR
+  # and the global address does not work for you, ask Claude for the
+  # OKX TR address and put it here.
+  rest_base_url: https://www.okx.com
+  ws_public_url: wss://ws.okx.com:8443/ws/v5/public
+  request_timeout_seconds: 10
+
+# --- Market data -----------------------------------------------------
+market_data:
+  # websocket = live stream (fast). rest = ask every few seconds (fallback).
+  mode: websocket
+  rest_poll_interval_seconds: 3
+  order_book_depth: 20
+  order_book_refresh_seconds: 10
+  # A price older than this is marked STALE.
+  stale_after_seconds: 30
+
+# --- FX (USD/TRY) ----------------------------------------------------
+fx:
+  # USDT/TRY on the exchange is used as the USD/TRY rate.
+  source_pair: USDT/TRY
+  # Spec rule: if FX is older than 5 minutes, no new positions.
+  max_age_seconds: 300
+
+# --- Liquidity thresholds for TRY pairs (used from Phase 2) ----------
+liquidity:
+  max_spread_bps: 30
+  min_book_depth_try: 250000
+  min_24h_volume_try: 5000000
+
+# --- Status output ---------------------------------------------------
+status:
+  print_every_seconds: 5
+  # A JSON snapshot written here; the phone dashboard (Phase 5) reads it.
+  status_file: data/status.json
+  log_file: logs/bot.log
