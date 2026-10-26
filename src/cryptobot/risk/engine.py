@@ -7,7 +7,7 @@ Halt levels:
   NORMAL            new positions allowed (if the pair and FX checks pass)
   NO_NEW_POSITIONS  nothing new is opened; monitoring continues
   CLOSE_ALL         drawdown limit hit: nothing new, open positions must be closed
-                    (paper positions arrive in Phase 3, which acts on this flag)
+                    (the paper trader closes them when it sees this flag)
 
 Who can clear what:
   daily / weekly loss halt   only time (next day / next Monday, Turkey time)
@@ -52,7 +52,7 @@ class HaltLevel(IntEnum):
 
 
 class PortfolioView(Protocol):
-    """What the risk engine needs from the portfolio. Phase 3 plugs in paper PnL."""
+    """What the risk engine needs from the portfolio. PaperPortfolio implements it."""
 
     def equity(self) -> Decimal:
         """Total account value in the risk currency (TRY)."""
@@ -61,7 +61,7 @@ class PortfolioView(Protocol):
 
 
 class FlatPortfolio:
-    """Phase 2 stand-in: no trading yet, so equity stays at the starting capital."""
+    """Stand-in with no trading: equity stays at the starting capital (READ_ONLY tests)."""
 
     def __init__(self, capital: Decimal) -> None:
         self._capital = capital

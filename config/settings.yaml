@@ -77,6 +77,30 @@ liquidity:
   depth_band_bps: 50
   alert_after_seconds: 120      # warn only if a pair stays unfit this long
 
+# --- Paper (practice) account ------------------------------------------
+# Fake money only. Buys and sells are simulated against the real OKX order
+# book (with fees), nothing is ever sent to the exchange.
+paper:
+  state_file: data/paper_state.json  # balances and open positions survive a restart
+  fee_bps: 10              # fee per buy and per sell (10 = 0.10%)
+  max_position_pct: 45     # one position uses at most 45% of the account
+  check_every_seconds: 2   # how often stop-loss / target are checked
+
+# --- TEST trigger (placeholder, NOT a strategy) --------------------------
+# Only here so you can watch practice trades, Telegram messages and the
+# risk rules work before the real strategy (Phase 4). It has no edge:
+# every 30 minutes it buys the next allowed pair, sells at +1.5% (target),
+# at -1% (stop-loss) or after 3 hours. Set enabled: false to switch it off.
+test_trigger:
+  enabled: true
+  pairs: [BTC/TRY, ETH/TRY]
+  first_after_minutes: 3   # first try this long after start
+  every_minutes: 30        # then one new try every 30 minutes
+  retry_minutes: 5         # if nothing could be bought, try again after 5 min
+  stop_loss_pct: 1
+  take_profit_pct: 1.5
+  max_hold_minutes: 180
+
 # --- Status output ---------------------------------------------------
 status:
   print_every_seconds: 5

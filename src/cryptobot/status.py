@@ -26,6 +26,7 @@ def build_snapshot(
     fx: FxRateService,
     started_at: datetime,
     risk: dict[str, Any] | None = None,
+    portfolio: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     rate = fx.usd_try()
@@ -65,6 +66,7 @@ def build_snapshot(
         else {"usd_try": _num(rate.rate, 4), "source": rate.source, "fresh": fx.is_fresh(now)},
         "new_positions_allowed": risk["new_positions_allowed"] if risk else fx.is_fresh(now),
         "risk": risk,
+        "portfolio": portfolio,
         "pairs": pairs,
         "errors": md.errors,
         "last_error": md.last_error,
@@ -116,6 +118,17 @@ def render_console(snapshot: dict[str, Any]) -> str:
         for p in snapshot["pairs"]:
             if p.get("problems"):
                 lines.append(f"  {p['pair']} işleme uygun değil: " + "; ".join(p["problems"]))
+    pf = snapshot.get("portfolio")
+    if pf is not None:
+        lines.append(
+            f"Deneme hesabı: {pf['equity_try']} TL (≈ {pf['equity_usd'] or '-'} USD) | nakit {pf['cash_try']} TL | "
+            f"kapanan işlem {pf['trades_closed']}, gerçekleşen kâr {pf['realized_try']} TL"
+        )
+        for pos in pf["positions"]:
+            lines.append(
+                f"  Açık: {pos['pair']} {pos['quantity']} @ {pos['entry_price']} -> {pos['price']} "
+                f"({pos['unrealized_try']} TL, %{pos['unrealized_pct']}) stop {pos['stop_price']}"
+            )
     if snapshot["errors"]:
         lines.append(f"Uyarı: {snapshot['errors']} bağlantı hatası oldu. Son: {snapshot['last_error']}")
     return "\n".join(lines)
@@ -146,6 +159,22 @@ def render_telegram(snapshot: dict[str, Any], utc_offset_hours: int = 3) -> str:
             f"Bakiye: {_tr_num(risk.get('equity'))} TL | bugünkü zarar %{_tr_num(risk.get('daily_loss_pct'))}"
         )
         lines.append(f"Açık pozisyon: {risk['open_positions']} / {risk['limits']['max_concurrent_positions']}")
+    pf = snapshot.get("portfolio")
+    if pf is not None:
+        lines.append(
+            f"Deneme hesabı: {_tr_num(pf['equity_try'])} TL (≈ {_tr_num(pf['equity_usd'])} USD), "
+            f"başlangıç {_tr_num(pf['starting_capital'])} TL"
+        )
+        lines.append(
+            f"Kapanan işlemlerden kâr: {_tr_num(pf['realized_try'])} TL ({pf['trades_closed']} işlem), "
+            f"ödenen komisyon {_tr_num(pf['fees_try'])} TL"
+        )
+        for pos in pf["positions"]:
+            lines.append(
+                f"• {pos['pair']}: alış {_tr_num(pos['entry_price'])}, şimdi {_tr_num(pos['price'])}, "
+                f"{_tr_num(pos['unrealized_try'])} TL (%{_tr_num(pos['unrealized_pct'])}), "
+                f"stop {_tr_num(pos['stop_price'])}"
+            )
     fx = snapshot["fx"]
     if fx is None:
         lines.append("USD/TRY: henüz yok")

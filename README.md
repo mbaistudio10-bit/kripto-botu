@@ -1,6 +1,6 @@
 # Kripto Botu
 
-Multi-currency crypto trading bot. **Phase 2: risk engine, kill switch, Telegram (Achilles) alerts, Jarvis link.** No order code exists yet.
+Multi-currency crypto trading bot. **Phase 3: paper trading** (simulated fills against the live OKX book, PnL in TRY and USD) on top of the Phase 2 risk engine, kill switch, Telegram (Achilles) alerts and Jarvis link. No code sends orders to an exchange.
 Not financial advice. Turkish setup guide: [KURULUM.md](KURULUM.md).
 
 ## Layout
@@ -17,6 +17,10 @@ src/cryptobot/
   risk/engine.py              Risk Engine + Kill-Switch: loss limits, drawdown, per-trade risk,
                               position count, FX freshness, TRY liquidity, delist rule
   risk/state.py               persisted halts/limits (data/risk_state.json)
+  paper/portfolio.py          paper account (PortfolioView): balances, positions, PnL in TRY + USD
+                              (data/paper_state.json)
+  paper/trader.py             simulated taker fills (book walk + fee), stop/target/time exits,
+                              emergency close, PLACEHOLDER test trigger (not a strategy)
   events.py                   event log (data/events.jsonl) + trade/stop-loss/error events
   notify/telegram.py          Telegram alerts + owner commands (/durum /limitler /rapor /durdur /devam /onayla)
   api/jarvis.py               local HTTP API for Jarvis (read + emergency stop/resume) and signed webhook
@@ -70,7 +74,7 @@ curl -X POST -H "Authorization: Bearer $JARVIS_CONTROL_KEY" -d '{"reason":"acil"
 
 ## Roadmap
 1. Skeleton, config, exchange adapter, market data (done)
-2. Risk engine, kill switch, Telegram alerts/commands, Jarvis link (this)
-3. Paper trading + PnL in TRY and USD (emits trade_opened / trade_closed / stop_loss_hit)
+2. Risk engine, kill switch, Telegram alerts/commands, Jarvis link (done)
+3. Paper trading + PnL in TRY and USD (this; entries come from a placeholder test trigger)
 4. Simple trend strategy + backtest
 5. Phone status page
