@@ -11,6 +11,8 @@ permissions:
 jobs:
   build:
     strategy:
+      # A missing Mac runner must not hold back the Windows download.
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -46,6 +48,8 @@ jobs:
 
   release:
     needs: build
+    # Publish whatever was built; a zip whose build failed keeps its previous version.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -56,6 +60,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          ls assets/KriptoBotu-Windows.zip  # the Windows build must have passed
+          [ -f assets/KriptoBotu-Mac.zip ] || \
+            gh release download latest --repo "$GITHUB_REPOSITORY" -p KriptoBotu-Mac.zip -D assets || true
           gh release delete latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
           gh release create latest assets/*.zip --repo "$GITHUB_REPOSITORY" \
             --title "KriptoBotu (en son sürüm)" --notes "İndirin, açın, KriptoBotu dosyasına çift tıklayın."
