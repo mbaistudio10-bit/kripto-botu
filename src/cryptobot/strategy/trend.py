@@ -37,6 +37,13 @@ class Prepared:
     htf_slow: list[float | None]
 
 
+def bar_name(minutes: int) -> str:
+    """Turkish name of a candle length: "günlük", "4 saatlik", "15 dakikalık"."""
+    if minutes == 1440:
+        return "günlük"
+    return f"{minutes // 60} saatlik" if minutes >= 60 else f"{minutes} dakikalık"
+
+
 class TrendBreakoutStrategy:
     name = "trend_breakout"
     version = "trend_breakout-1.0"
@@ -92,9 +99,9 @@ class TrendBreakoutStrategy:
             "breakout_level": level, "htf_close": hc, "htf_ema_fast": round(hf, 6),
             "htf_ema_slow": round(hs, 6),
         }
-        trend_h = cfg.trend_bar_minutes // 60
+        trend_name = bar_name(cfg.trend_bar_minutes)
         if not (hc > hs and hf > hs):
-            return flat(sym, f"büyük resimde ({trend_h} saatlik) yükseliş trendi yok", v, features, c.ts)
+            return flat(sym, f"büyük resimde ({trend_name}) yükseliş trendi yok", v, features, c.ts)
         if c.close <= e:
             return flat(sym, "fiyat ortalamanın altında", v, features, c.ts)
         if c.close <= level:
@@ -105,12 +112,13 @@ class TrendBreakoutStrategy:
         # Stronger breakouts (in ATRs above the old high) get a bit more confidence.
         confidence = round(min(0.9, 0.5 + 0.2 * (c.close - level) / a), 2)
         hours = cfg.bar_minutes * cfg.breakout_bars // 60
+        span = f"{hours // 24} günün" if hours >= 48 else f"{hours} saatin"
         level_tr = f"{level:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        why = f"{trend_h} saatlik trend yukarı ve fiyat son {hours} saatin zirvesini ({level_tr}) yukarı kırdı"
+        why = f"{trend_name} trend yukarı ve fiyat son {span} zirvesini ({level_tr}) yukarı kırdı"
         return Signal(
             symbol=sym, quote_currency=sym.quote, direction=Direction.LONG, confidence=confidence,
             expected_entry=c.close, invalidation_price=stop, target_zones=(),
-            time_horizon=f"{cfg.bar_minutes} dk mumlar, birkaç saat - birkaç gün",
+            time_horizon=f"{bar_name(cfg.bar_minutes)} mumlar, birkaç saat - birkaç hafta",
             required_liquidity=None, max_allowed_slippage_bps=None,
             rationale=why, feature_snapshot=features, strategy_version=v, bar_ts=c.ts,
         )

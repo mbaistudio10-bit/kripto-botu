@@ -117,23 +117,24 @@ Teknik ayrıntılar (Jarvis'i kuran kişi için): `README.md` → "Jarvis API".
 Bot **sahte parayla** çalışan bir deneme hesabı tutar (başlangıç: 10.000 TL). Borsaya hiçbir emir gitmez.
 Alış ve satışlar OKX'teki gerçek fiyat ve emir defterine göre, komisyon (%0,10) dahil hesaplanır.
 Faz 3'teki "deneme tetikleyicisi" kaldırıldı; yerine basit bir **trend takip stratejisi** geldi.
+Geçmiş veri testinde en istikrarlı çıkan **4 saatlik mum + günlük trend** ayarı kullanılıyor (ilk ayar 1 saatlik mumdu).
 
-**Ne zaman alır?** (BTC/TRY ve ETH/TRY, her saat başı bir saatlik mum kapanınca bakar) Hepsi aynı anda doğruysa:
-1. **Büyük resim yukarı:** 4 saatlik mumlarda fiyat ortalamasının üstünde ve kısa ortalama uzun ortalamanın üstünde.
-2. Fiyat 1 saatlik ortalamasının üstünde.
-3. **Kırılım:** fiyat son 20 saatin en yüksek seviyesinin üstünde kapandı.
+**Ne zaman alır?** (BTC/TRY ve ETH/TRY, her 4 saatlik mum kapanınca bakar: Türkiye saatiyle 03:00, 07:00, 11:00, 15:00, 19:00, 23:00) Hepsi aynı anda doğruysa:
+1. **Büyük resim yukarı:** günlük mumlarda fiyat ortalamasının üstünde ve kısa ortalama uzun ortalamanın üstünde.
+2. Fiyat 4 saatlik ortalamasının üstünde.
+3. **Kırılım:** fiyat son 20 mumun (yaklaşık 3 günün) en yüksek seviyesinin üstünde kapandı.
 4. Fiyat ne çok durgun ne çok çılgın oynuyor.
 
 Sonra **risk motoru** son sözü söyler (işlem başına en fazla %1 risk, en fazla 2 pozisyon, kur ve likidite kontrolü).
 Risk kuralı izin vermezse alış yapmaz ve size nedenini yazar (en fazla 30 dakikada bir).
-**Saatlerce, hatta günlerce alış olmaması normaldir.** Strateji net bir yükseliş bekler.
+**Günlerce, hatta haftalarca alış olmaması normaldir.** Strateji net bir yükseliş bekler.
 
 **Ne zaman satar?** (alıştan bağımsız ayrı kurallar)
 - **Zarar-kes (stop):** alışta, fiyatın normal oynama payının 2,5 katı aşağıya konur. Fiyat oraya inerse satar.
 - **Başa-baş:** fiyat, stop mesafesi kadar yükselince stop alış fiyatının biraz üstüne çekilir (🔒 mesajı gelir).
 - **İz süren stop:** sonra fiyat yükseldikçe stop da yukarı gelir, hiç aşağı inmez. Böylece kârın bir kısmı korunur.
-- **Süre:** 48 saatte kâra geçemeyen işlem satılır; her işlem en geç 10 gün sonra satılır.
-- **Trend bozulursa:** 4 saatlik yükseliş trendi biterse satar.
+- **Süre:** 3 günde kâra geçemeyen işlem satılır; her işlem en geç 15 gün sonra satılır.
+- **Trend bozulursa:** günlük yükseliş trendi biterse satar.
 
 **Ne görürsünüz?**
 - Siyah pencerede ve `/durum`'da her çift için stratejinin son kararı ("bekle, ..." veya "ALIŞ sinyali").
@@ -159,9 +160,15 @@ komisyon ve kayma (kötü fiyat) payı dahil dener ve sonucu ekrana yazar. Teleg
 Rapor ayrıca `data/backtest_report.txt` dosyasına kaydedilir. Bu test sırasında ana botun kapalı olmasına gerek yok.
 
 Test **3 kuralı yan yana** dener. Hepsi aynı fikir (trend + kırılım), sadece hızları farklı:
-1. Şu anki ayarlar (1 saatlik mum, 4 saatlik trend)
-2. 4 saatlik mum, günlük trend (daha yavaş)
+1. Şu anki ayarlar (4 saatlik mum, günlük trend)
+2. 1 saatlik mum, 4 saatlik trend (ilk ayarlar, daha hızlı)
 3. Günlük mum, günlük trend (en yavaş)
+
+Her kural iki kez denenir:
+- **TL çiftleriyle** (BTC/TRY, ETH/TRY): boştaki para TL olarak durur.
+- **Dolar çiftleriyle** (BTC/USDT, ETH/USDT): aynı 10.000 TL başta dolara (USDT) çevrilir, boştaki para dolar olarak durur.
+  Sonuç yine hem TL hem USD olarak yazılır. Dolar çiftlerinde bir kural ancak **dolar olarak da** kâr ettiyse "kârlı" sayılır.
+  (Deneme botu şimdilik TL çiftleriyle çalışmaya devam eder; dolar çiftleri sadece bu testte kullanılır.)
 
 Bu ayarlar önceden sabitlendi; sonuca bakıp değiştirilmedi. Her kural için iki satır vardır:
 - **Öğrenme dönemi** (ilk %70)

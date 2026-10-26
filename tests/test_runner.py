@@ -14,6 +14,9 @@ from tests.conftest import FakeAdapter
 from tests.test_paper import BTC, ETH, USDT, Rig, rig, set_price  # noqa: F401 - fixture
 
 PRICE = 3_500_000.0
+# These tests use 1-hour candles (H); the live default is 4-hour candles.
+HOURLY = StrategyConfig(bar_minutes=60, trend_bar_minutes=240)
+HOURLY_EXITS = ExitConfig(stale_after_bars=48, max_hold_bars=240)
 
 
 def breakout_closes() -> list[float]:
@@ -33,8 +36,8 @@ def candles_ending(now: datetime, closes: list[float], ago: timedelta = timedelt
 
 def make_runner(r: Rig, exits: ExitConfig | None = None) -> tuple[StrategyRunner, CandleService]:
     cs = CandleService(FakeAdapter({}), [BTC, ETH], 60, 1000, 60)
-    runner = StrategyRunner(r.trader, r.engine, cs, TrendBreakoutStrategy(StrategyConfig()),
-                            StrategyConfig(), exits or ExitConfig(), r.events, [BTC, ETH, USDT])
+    runner = StrategyRunner(r.trader, r.engine, cs, TrendBreakoutStrategy(HOURLY),
+                            HOURLY, exits or HOURLY_EXITS, r.events, [BTC, ETH, USDT])
     return runner, cs
 
 

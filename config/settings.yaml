@@ -88,17 +88,19 @@ paper:
 
 # --- Strategy (Phase 4): trend breakout ---------------------------------
 # Buys only when ALL are true at the close of a candle:
-#  1) the big picture (4-hour candles) is in an uptrend,
-#  2) the price is above its 1-hour average,
+#  1) the big picture (daily candles) is in an uptrend,
+#  2) the price is above its 4-hour average,
 #  3) the price closes above the highest price of the last 20 candles,
 #  4) the price moves enough (but not wildly).
 # Every buy still needs the risk engine's OK. Paper money only.
-# Hours without a buy are normal: the rule waits for a clear trend.
+# Days without a buy are normal: the rule waits for a clear trend.
+# 4-hour candles + daily trend was the steadiest of the 3 rule sets in the
+# backtest (October 2026). The first setting was 1-hour candles + 4-hour trend.
 strategy:
   enabled: true
   pairs: [BTC/TRY, ETH/TRY]
-  bar_minutes: 60          # 1-hour candles (240 = 4 hours, 1440 = daily)
-  trend_bar_minutes: 240   # 4-hour candles for the big-picture trend
+  bar_minutes: 240         # 4-hour candles (60 = 1 hour, 1440 = daily)
+  trend_bar_minutes: 1440  # daily candles for the big-picture trend
   trend_ema_fast: 20
   trend_ema_slow: 50
   ema_period: 50
@@ -117,9 +119,9 @@ exits:
   breakeven_at_r: 1.0        # price 1 R up -> stop moves to the buy price (+ costs)
   breakeven_buffer_bps: 20
   trail_atr: 3.0             # then the stop follows the best close at 3 x ATR (only up)
-  stale_after_bars: 48       # sell if the trade has not moved up after 48 candles
-  max_hold_bars: 240         # sell every trade after 240 candles (10 days)
-  exit_on_trend_break: true  # sell when the 4-hour uptrend ends
+  stale_after_bars: 18       # sell if the trade has not moved up after 18 candles (3 days)
+  max_hold_bars: 90          # sell every trade after 90 candles (15 days)
+  exit_on_trend_break: true  # sell when the daily uptrend ends
 
 # --- Backtest (test the strategy on past prices) --------------------------
 # Start with GeriyeTest.bat (Windows) or GeriyeTest.command (Mac).
@@ -130,7 +132,11 @@ backtest:
   in_sample_pct: 70
   slippage_bps: 10           # worse price on every buy and sell (0.10%), on top of the fee
   drawdown_pause_days: 7     # after an emergency stop: pause 7 days, then continue (0 = stop the test)
-  compare_variants: true     # also test 2 fixed, slower rule sets (4-hour and daily candles)
+  compare_variants: true     # also test the other 2 fixed rule sets (1-hour and daily candles)
+  # Same rules on dollar pairs: idle money is kept in USDT instead of TL.
+  # Only the test uses these; the paper bot keeps trading the TL pairs above.
+  compare_usdt: true
+  usdt_pairs: [BTC/USDT, ETH/USDT]
   cache_dir: data/candles
   report_file: data/backtest_report.txt
 

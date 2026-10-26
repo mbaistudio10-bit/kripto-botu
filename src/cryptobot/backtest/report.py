@@ -45,10 +45,12 @@ def metrics(r: BtResult) -> Metrics:
     usd = None
     if r.usd_start and r.usd_end:
         usd = (r.usd_end / r.usd_start - 1) * 100
+    # Returns are always measured in TL (for a USDT account: incl. the USD/TRY change).
+    tl0, tl1 = (r.tl_start, r.tl_end) if r.tl_start and r.tl_end else (r.start_equity, r.end_equity)
     return Metrics(
         trades=n, wins=len(wins), win_rate=len(wins) / n * 100 if n else 0.0,
-        total_return_pct=(r.end_equity / r.start_equity - 1) * 100,
-        profit=r.end_equity - r.start_equity,
+        total_return_pct=(tl1 / tl0 - 1) * 100,
+        profit=tl1 - tl0,
         avg_win=sum(wins) / len(wins) if wins else 0.0,
         avg_loss=sum(losses) / len(losses) if losses else 0.0,
         profit_factor=sum(wins) / gross_loss if gross_loss > 0 else None,
@@ -58,9 +60,9 @@ def metrics(r: BtResult) -> Metrics:
     )
 
 
-def _tl(x: float) -> str:
+def _tl(x: float, quote: str = "TRY") -> str:
     s = f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    return f"{s} TL"
+    return f"{s} {'TL' if quote == 'TRY' else quote}"
 
 
 def _pct(x: float) -> str:
@@ -70,22 +72,28 @@ def _pct(x: float) -> str:
 def section(r: BtResult) -> list[str]:
     m = metrics(r)
     days = (r.end - r.start) / timedelta(days=1)
-    lines = [
-        f"■ {r.label} ({r.start:%d.%m.%Y} – {r.end:%d.%m.%Y}, {days:.0f} gün)",
-        f"  Başlangıç {_tl(r.start_equity)} → bitiş {_tl(r.end_equity)}  ({_pct(m.total_return_pct)})",
-    ]
-    if m.usd_return_pct is not None:
-        lines.append(f"  Dolar bazında: {_pct(m.usd_return_pct)} (TL'nin dolara karşı değişimi dahil)")
+    q = r.quote
+    lines = [f"■ {r.label} ({r.start:%d.%m.%Y} – {r.end:%d.%m.%Y}, {days:.0f} gün)"]
+    if q == "TRY":
+        lines.append(f"  Başlangıç {_tl(r.start_equity)} → bitiş {_tl(r.end_equity)}  ({_pct(m.total_return_pct)})")
+        if m.usd_return_pct is not None:
+            lines.append(f"  Dolar bazında: {_pct(m.usd_return_pct)} (TL'nin dolara karşı değişimi dahil)")
+    else:
+        lines.append(f"  Hesap dolar (USDT) olarak tutuldu: {_tl(r.start_equity, q)} → {_tl(r.end_equity, q)}"
+                     f"  ({_pct(m.usd_return_pct or 0.0)})")
+        if r.tl_start and r.tl_end:
+            lines.append(f"  TL bazında: {_tl(r.tl_start)} → {_tl(r.tl_end)}  ({_pct(m.total_return_pct)}, "
+                         "doların TL'ye karşı değişimi dahil)")
     lines.append(f"  İşlem sayısı: {m.trades} | kazanan: {m.wins} (%{m.win_rate:.0f})")
     if m.trades:
         pf = "-" if m.profit_factor is None else f"{m.profit_factor:.2f}".replace(".", ",")
         lines += [
-            f"  Ortalama kazanç {_tl(m.avg_win)} | ortalama kayıp {_tl(m.avg_loss)} | kâr faktörü {pf}",
+            f"  Ortalama kazanç {_tl(m.avg_win, q)} | ortalama kayıp {_tl(m.avg_loss, q)} | kâr faktörü {pf}",
             f"  İşlem başına ortalama sonuç: {m.avg_r:+.2f} R (1 R = stop'ta kaybedilecek tutar)".replace(".", ",", 1),
         ]
     lines += [
         f"  En büyük düşüş (zirveden): %{m.max_drawdown_pct:.2f}".replace(".", ","),
-        f"  Ödenen komisyon: {_tl(m.fees)} | piyasada kalma süresi: %{m.exposure_pct:.0f}",
+        f"  Ödenen komisyon: {_tl(m.fees, q)} | piyasada kalma süresi: %{m.exposure_pct:.0f}",
         f"  Sinyal: {r.signals}, limit/nakit yüzünden alınmayan: {r.skipped}",
     ]
     for sym, pct in r.buy_hold_pct.items():
@@ -123,15 +131,23 @@ def _hold_pct(fx: list[Candle] | None, r: BtResult) -> float | None:
     return (b / a - 1) * 100 if a and b else None
 
 
+def _own_return(r: BtResult, m: Metrics) -> float:
+    """Return in the account's own money: a dollar account must make dollars,
+    not just gain from the TL losing value."""
+    if r.quote != "TRY" and m.usd_return_pct is not None:
+        return m.usd_return_pct
+    return m.total_return_pct
+
+
 def comparison_verdict(results: list) -> str:
     good, few = [], []
     for v, is_, oos in results:
         a, b = metrics(is_), metrics(oos)
         pf_ok = b.wins > 0 if b.profit_factor is None else b.profit_factor >= 1.1  # None = no losers
-        if b.total_return_pct > 0 and pf_ok:
+        if _own_return(oos, b) > 0 and pf_ok:
             if b.trades < 10:
                 few.append((v, b))
-            elif a.total_return_pct > 0:
+            elif _own_return(is_, a) > 0:
                 good.append((v, b))
     if good:
         v, b = max(good, key=lambda x: x[1].total_return_pct)
@@ -150,7 +166,7 @@ def comparison_verdict(results: list) -> str:
 
 def render_comparison(results: list, header: list[str], fx: list[Candle] | None = None) -> str:
     """Short side-by-side report (fits one Telegram message)."""
-    lines = [f"📈 GEÇMİŞ VERİ TESTİ: {len(results)} kural karşılaştırması", *header, ""]
+    lines = ["📈 GEÇMİŞ VERİ TESTİ: kural karşılaştırması", *header, ""]
     _, is0, oos0 = results[0]
     lines.append(f"Dönemler: öğrenme {is0.start:%d.%m.%Y}–{is0.end:%d.%m.%Y}, "
                  f"sınama {oos0.start:%d.%m.%Y}–{oos0.end:%d.%m.%Y} (kurallar bu dönemi hiç görmedi)")

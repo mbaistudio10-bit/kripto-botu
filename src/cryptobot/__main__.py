@@ -33,7 +33,7 @@ from cryptobot.paper.trader import PaperTrader
 from cryptobot.risk.engine import RiskEngine
 from cryptobot.status import build_snapshot, render_console, render_telegram, write_snapshot
 from cryptobot.strategy.runner import StrategyRunner
-from cryptobot.strategy.trend import TrendBreakoutStrategy
+from cryptobot.strategy.trend import TrendBreakoutStrategy, bar_name
 
 log = logging.getLogger("cryptobot")
 
@@ -237,7 +237,7 @@ async def run(settings: Settings, once: bool) -> int:
                     tasks.append(asyncio.create_task(runner.run(), name="strategy"))
                     s = settings.strategy
                     print(f"Strateji açık: trend takibi ({', '.join(map(str, strategy_pairs))}), "
-                          f"{s.bar_minutes} dakikalık mumlar, {s.trend_bar_minutes // 60} saatlik trend filtresi. "
+                          f"{bar_name(s.bar_minutes)} mumlar, {bar_name(s.trend_bar_minutes)} trend filtresi. "
                           "Alış sadece bir mum kapanınca ve kurallar uyunca olur; saatlerce alış olmaması normaldir.")
                 else:
                     print("Strateji kapalı (settings.yaml → strategy → enabled: false): yeni alış yapılmaz.")
