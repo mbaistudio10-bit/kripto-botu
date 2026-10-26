@@ -33,6 +33,11 @@ jobs:
           cp dist/KriptoBotu* out/KriptoBotu/
           cp config/settings.yaml out/KriptoBotu/config/
           cp KURULUM.md out/KriptoBotu/
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp packaging/GeriyeTest.bat out/KriptoBotu/
+          else
+            cp packaging/GeriyeTest.command out/KriptoBotu/ && chmod +x out/KriptoBotu/GeriyeTest.command
+          fi
           cd out && 7z a ../${{ matrix.asset }} KriptoBotu
       - uses: actions/upload-artifact@v4
         with:

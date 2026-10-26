@@ -16,7 +16,7 @@ from typing import Any
 import aiohttp
 
 from cryptobot.config import ExchangeConfig
-from cryptobot.domain.models import BookLevel, Instrument, MarketType, OrderBook, Symbol, Ticker
+from cryptobot.domain.models import BookLevel, Candle, Instrument, MarketType, OrderBook, Symbol, Ticker
 from cryptobot.exchanges.base import ExchangeAdapter, ExchangeError
 
 log = logging.getLogger(__name__)
@@ -25,6 +25,7 @@ _INST_TYPE = {MarketType.SPOT: "SPOT"}
 # OKX drops idle sockets after 30s; we ping well before that.
 _WS_PING_SECONDS = 20
 _WS_MAX_BACKOFF_SECONDS = 60
+_BARS = {1: "1m", 5: "5m", 15: "15m", 30: "30m", 60: "1H", 120: "2H", 240: "4H", 1440: "1Dutc"}
 
 
 def to_okx_symbol(symbol: Symbol) -> str:
@@ -72,6 +73,17 @@ def parse_order_book(symbol: Symbol, row: dict[str, Any]) -> OrderBook:
         asks=levels(row.get("asks", [])),
         exchange_ts=_ts(row["ts"]),
     )
+
+
+def parse_candles(rows: list[list[str]]) -> list[Candle]:
+    """OKX rows are [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm], newest first."""
+    out = [
+        Candle(_ts(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5] or 0))
+        for r in rows
+        if len(r) < 9 or r[8] == "1"  # "0" = bar still forming
+    ]
+    out.sort(key=lambda c: c.ts)
+    return out
 
 
 def parse_instrument(row: dict[str, Any]) -> Instrument:
@@ -146,6 +158,27 @@ class OkxAdapter(ExchangeAdapter):
         if not rows:
             raise ExchangeError(f"no order book for {symbol}")
         return parse_order_book(symbol, rows[0])
+
+    async def fetch_candles(
+        self, symbol: Symbol, bar_minutes: int, before: datetime | None = None, limit: int = 100
+    ) -> list[Candle]:
+        bar = _BARS.get(bar_minutes)
+        if bar is None:
+            raise ExchangeError(f"OKX has no {bar_minutes}-minute candles")
+        params = {"instId": to_okx_symbol(symbol), "bar": bar}
+        if before is None:
+            path = "/api/v5/market/candles"
+            params["limit"] = str(min(limit, 300))
+        else:
+            # history-candles reaches back years; `after` means "older than".
+            path = "/api/v5/market/history-candles"
+            params["limit"] = str(min(limit, 100))
+            params["after"] = str(int(before.timestamp() * 1000))
+        rows = await self._get(path, params)
+        try:
+            return parse_candles(rows)  # type: ignore[arg-type]
+        except (IndexError, ValueError, TypeError) as exc:
+            raise ExchangeError(f"bad candle data for {symbol}: {exc!r}") from exc
 
     async def stream_tickers(self, symbols: Sequence[Symbol]) -> AsyncIterator[Ticker]:
         sub = {

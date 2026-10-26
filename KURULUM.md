@@ -1,7 +1,7 @@
-# Kripto Botu: Kurulum ve Kullanım Rehberi (Faz 3)
+# Kripto Botu: Kurulum ve Kullanım Rehberi (Faz 4)
 
 > **Önemli:** Bu yazılım yatırım tavsiyesi değildir. Geçmiş performans gelecekteki getiriyi garanti etmez.
-> Bot şu an **gerçek emir göndermez**. Sahte parayla (10.000 TL) deneme işlemleri yapar, riskleri izler ve size Telegram'dan (Achilles) haber verir.
+> Bot şu an **gerçek emir göndermez**. Bir trend stratejisiyle sahte parayla (10.000 TL) deneme işlemleri yapar, riskleri izler ve size Telegram'dan (Achilles) haber verir.
 
 Kodlama bilgisi gerekmez. Python kurmanıza da gerek yok.
 
@@ -14,6 +14,7 @@ Kodlama bilgisi gerekmez. Python kurmanıza da gerek yok.
 3. Zip'e sağ tıklayıp **"Tümünü ayıkla"** deyin. Çıkan `KriptoBotu` klasörünü Masaüstüne koyun.
 
 **Güncelleme yaparken:** yeni zip'i aynı klasörün üstüne açabilirsiniz. `.env` dosyanız ve `data` klasörünüz silinmez.
+"Dosyaların yerine geçsin mi?" diye sorarsa **"Evet"** deyin (yeni `config/settings.yaml` gerekli).
 
 ---
 
@@ -69,7 +70,8 @@ Bot sadece **sizin** Telegram hesabınızdan gelen komutlara cevap verir. Başka
 ### 3d. Size ne zaman mesaj gelir?
 - 🔴 **KRİTİK:** günlük/haftalık zarar limiti doldu, acil durdurma, bot çöktü, açık pozisyonu olan çift borsadan kalktı
 - 🟠 **UYARI:** limite yaklaşılıyor, kur eski, bir çiftin likiditesi yetersiz, sistem hatası, biri botu durdurdu
-- 🛒 **Alış**, 💰 **Satış**, 🛑 **Stop-loss**: her deneme işleminde anında
+- 🛒 **Alış**, 💰 **Satış**, 🛑 **Stop-loss**: her deneme işleminde anında (alışta "Sebep" satırı stratejinin neden aldığını yazar)
+- 🔒 **Stop yükseltildi**: bir işlem kâra geçip stop alış fiyatının üstüne çekilince
 - Aynı uyarı 30 dakikada bir defadan fazla gelmez. KRİTİK ve işlem mesajları her zaman gelir.
 
 ---
@@ -110,38 +112,70 @@ Teknik ayrıntılar (Jarvis'i kuran kişi için): `README.md` → "Jarvis API".
 
 ---
 
-## 6. Deneme işlemleri (Faz 3)
+## 6. Strateji: ne zaman alır, ne zaman satar? (Faz 4)
 
 Bot **sahte parayla** çalışan bir deneme hesabı tutar (başlangıç: 10.000 TL). Borsaya hiçbir emir gitmez.
 Alış ve satışlar OKX'teki gerçek fiyat ve emir defterine göre, komisyon (%0,10) dahil hesaplanır.
+Faz 3'teki "deneme tetikleyicisi" kaldırıldı; yerine basit bir **trend takip stratejisi** geldi.
 
-**Ne zaman alış yapar?** Şimdilik bir **deneme tetikleyicisi** var. Bu bir strateji **değildir**, kazanç beklentisi yoktur.
-Tek amacı, sistemin işlem yaptığını, mesajları ve risk kurallarını görebilmenizdir:
-- Bot açıldıktan 3 dakika sonra, sonra her 30 dakikada bir, BTC/TRY ve ETH/TRY arasında sırayla küçük bir alış dener.
-- Her alış, risk motorunun onayından geçer (işlem başına en fazla %1 risk, en fazla 2 pozisyon, kur ve likidite kontrolü).
-- Fiyat **%1 düşerse** stop-loss ile satar, **%1,5 yükselirse** kârla satar, **3 saat** dolarsa satar.
-- Risk kuralı izin vermezse (örneğin emir defteri sığ) alış yapmaz ve size nedenini yazar (en fazla 30 dakikada bir).
+**Ne zaman alır?** (BTC/TRY ve ETH/TRY, her saat başı bir saatlik mum kapanınca bakar) Hepsi aynı anda doğruysa:
+1. **Büyük resim yukarı:** 4 saatlik mumlarda fiyat ortalamasının üstünde ve kısa ortalama uzun ortalamanın üstünde.
+2. Fiyat 1 saatlik ortalamasının üstünde.
+3. **Kırılım:** fiyat son 20 saatin en yüksek seviyesinin üstünde kapandı.
+4. Fiyat ne çok durgun ne çok çılgın oynuyor.
 
-Gerçek strateji Faz 4'te gelecek. Deneme tetikleyicisini kapatmak için `config/settings.yaml` içinde `test_trigger` → `enabled: false`.
+Sonra **risk motoru** son sözü söyler (işlem başına en fazla %1 risk, en fazla 2 pozisyon, kur ve likidite kontrolü).
+Risk kuralı izin vermezse alış yapmaz ve size nedenini yazar (en fazla 30 dakikada bir).
+**Saatlerce, hatta günlerce alış olmaması normaldir.** Strateji net bir yükseliş bekler.
+
+**Ne zaman satar?** (alıştan bağımsız ayrı kurallar)
+- **Zarar-kes (stop):** alışta, fiyatın normal oynama payının 2,5 katı aşağıya konur. Fiyat oraya inerse satar.
+- **Başa-baş:** fiyat, stop mesafesi kadar yükselince stop alış fiyatının biraz üstüne çekilir (🔒 mesajı gelir).
+- **İz süren stop:** sonra fiyat yükseldikçe stop da yukarı gelir, hiç aşağı inmez. Böylece kârın bir kısmı korunur.
+- **Süre:** 48 saatte kâra geçemeyen işlem satılır; her işlem en geç 10 gün sonra satılır.
+- **Trend bozulursa:** 4 saatlik yükseliş trendi biterse satar.
 
 **Ne görürsünüz?**
-- Telegram'a 🛒 ALIŞ (deneme), 💰 SATIŞ (deneme), 🛑 STOP-LOSS mesajları; kazanç hem TL hem USD olarak.
-- `/durum`: deneme hesabının değeri (TL ve USD), açık pozisyonlar, anlık kâr/zarar.
-- `/rapor`: kapanan işlemlerin özeti.
-- `/durdur`: yeni alışları durdurur. **Açık pozisyonların stop-loss ve hedefi çalışmaya devam eder.**
+- Siyah pencerede ve `/durum`'da her çift için stratejinin son kararı ("bekle, ..." veya "ALIŞ sinyali").
+- Telegram'a 🛒 ALIŞ (deneme), 💰 SATIŞ (deneme), 🛑 STOP-LOSS, 🔒 stop yükseltildi mesajları; kazanç hem TL hem USD olarak.
+- `/durdur`: yeni alışları durdurur. **Açık pozisyonların stop ve satış kuralları çalışmaya devam eder.**
 - Zirveden %10 düşüş olursa bot tüm deneme pozisyonlarını kendisi kapatır.
 
 USD kazancı, alış ile satış arasındaki dolar kuru değişimini de içerir. Bu yüzden TL'de kâr, USD'de daha az görünebilir.
-
 Hesap bot kapatılıp açılınca kaldığı yerden devam eder (`data/paper_state.json`).
 Deneme hesabını sıfırdan başlatmak isterseniz: botu kapatın, bu dosyayı silin, botu açın.
+Stratejiyi kapatmak için `config/settings.yaml` içinde `strategy` → `enabled: false`.
 
 ---
 
-## 7. Dosyalar nerede?
+## 7. Geçmiş veri testi (backtest)
+
+Stratejinin geçmişte nasıl sonuç verirdi, bunu görmek için:
+- **Windows:** `KriptoBotu` klasöründeki **GeriyeTest.bat** dosyasına çift tıklayın.
+- **Mac:** **GeriyeTest.command** dosyasına çift tıklayın.
+
+Bot OKX'ten son 2 yılın saatlik fiyatlarını indirir (ilk seferde birkaç dakika, sonra hızlı), stratejiyi aynı kurallarla,
+komisyon ve kayma (kötü fiyat) payı dahil dener ve sonucu ekrana yazar. Telegram bağlıysa rapor telefonunuza da gelir.
+Rapor ayrıca `data/backtest_report.txt` dosyasına kaydedilir. Bu test sırasında ana botun kapalı olmasına gerek yok.
+
+Rapor iki bölümdür:
+- **Öğrenme dönemi** (ilk %70): kuralların "bildiği" dönem.
+- **Sınama dönemi** (son %30): kuralın hiç görmediği dönem. Asıl önemli olan budur.
+  Burada da sonuç iyi değilse kurala güvenilmemelidir.
+
+Rapordaki "alıp hiç satmasaydınız" satırı, aynı dönemde sadece alıp beklemenin sonucunu gösterir (karşılaştırma için).
+
+> **Unutmayın:** geçmiş veri testi yatırım tavsiyesi değildir. Geçmişte işe yarayan bir kural gelecekte para kaybettirebilir.
+> Geçmiş performans gelecekteki getiriyi garanti etmez. TRY çiftlerinde işlem az olduğu için gerçek fiyatlar testtekinden kötü olabilir.
+
+---
+
+## 8. Dosyalar nerede?
 - `.env`: gizli anahtarlar (kimseyle paylaşmayın)
 - `logs/bot.log`: teknik kayıtlar (bir sorun olursa bunu bana gönderin, `.env`'yi değil)
 - `data/events.jsonl`: tüm uyarı ve olayların kaydı
 - `data/risk_state.json`: durdurmaların ve limitlerin hafızası
 - `data/status.json`: botun anlık durumu
 - `data/paper_state.json`: deneme hesabının bakiyesi ve açık pozisyonları
+- `data/candles/`: indirilen geçmiş fiyatlar (silerseniz yeniden indirilir)
+- `data/backtest_report.txt`: son geçmiş veri testinin raporu

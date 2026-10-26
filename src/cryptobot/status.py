@@ -129,9 +129,29 @@ def render_console(snapshot: dict[str, Any]) -> str:
                 f"  Açık: {pos['pair']} {pos['quantity']} @ {pos['entry_price']} -> {pos['price']} "
                 f"({pos['unrealized_try']} TL, %{pos['unrealized_pct']}) stop {pos['stop_price']}"
             )
+    lines += strategy_lines(snapshot)
     if snapshot["errors"]:
         lines.append(f"Uyarı: {snapshot['errors']} bağlantı hatası oldu. Son: {snapshot['last_error']}")
     return "\n".join(lines)
+
+
+def strategy_lines(snapshot: dict[str, Any]) -> list[str]:
+    """One line per pair: what the strategy decided at the last closed candle."""
+    st = snapshot.get("strategy")
+    if not st:
+        return []
+    out = [f"Strateji (trend, {st['bar_minutes']} dk mum / {st['trend_bar_minutes'] // 60} sa trend):"]
+    for pair, p in st["pairs"].items():
+        if not p["ready"]:
+            why = "geçmiş mumlar yükleniyor"
+        elif p["decision"] is None:
+            why = "sıradaki mum kapanışı bekleniyor"
+        elif p["decision"] == "LONG":
+            why = "ALIŞ sinyali: " + (p["why"] or "")
+        else:
+            why = "bekle, " + (p["why"] or "")
+        out.append(f"  {pair}: {why}")
+    return out
 
 
 def _tr_num(text: str | None, places: int = 2) -> str:
@@ -187,6 +207,7 @@ def render_telegram(snapshot: dict[str, Any], utc_offset_hours: int = 3) -> str:
             continue
         mark = "✅" if p.get("tradable", True) else "⚠️ " + "; ".join(p.get("problems", []))
         lines.append(f"• {p['pair']}: {_tr_num(p['last'])} ({_tr_num(p['change_24h_pct'])}%) {mark}")
+    lines += [line.strip() if line.startswith("  ") else line for line in strategy_lines(snapshot)]
     local = datetime.fromisoformat(snapshot["time"]) + timedelta(hours=utc_offset_hours)
     lines.append(f"Saat: {local:%d.%m.%Y %H:%M} (TR)")
     return "\n".join(lines)

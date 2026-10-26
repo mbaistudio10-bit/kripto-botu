@@ -86,20 +86,51 @@ paper:
   max_position_pct: 45     # one position uses at most 45% of the account
   check_every_seconds: 2   # how often stop-loss / target are checked
 
-# --- TEST trigger (placeholder, NOT a strategy) --------------------------
-# Only here so you can watch practice trades, Telegram messages and the
-# risk rules work before the real strategy (Phase 4). It has no edge:
-# every 30 minutes it buys the next allowed pair, sells at +1.5% (target),
-# at -1% (stop-loss) or after 3 hours. Set enabled: false to switch it off.
-test_trigger:
+# --- Strategy (Phase 4): trend breakout ---------------------------------
+# Buys only when ALL are true at the close of a candle:
+#  1) the big picture (4-hour candles) is in an uptrend,
+#  2) the price is above its 1-hour average,
+#  3) the price closes above the highest price of the last 20 candles,
+#  4) the price moves enough (but not wildly).
+# Every buy still needs the risk engine's OK. Paper money only.
+# Hours without a buy are normal: the rule waits for a clear trend.
+strategy:
   enabled: true
   pairs: [BTC/TRY, ETH/TRY]
-  first_after_minutes: 3   # first try this long after start
-  every_minutes: 30        # then one new try every 30 minutes
-  retry_minutes: 5         # if nothing could be bought, try again after 5 min
-  stop_loss_pct: 1
-  take_profit_pct: 1.5
-  max_hold_minutes: 180
+  bar_minutes: 60          # 1-hour candles
+  trend_bar_minutes: 240   # 4-hour candles for the big-picture trend
+  trend_ema_fast: 20
+  trend_ema_slow: 50
+  ema_period: 50
+  breakout_bars: 20
+  atr_period: 14           # ATR = average size of a candle (how much the price moves)
+  stop_atr: 2.5            # first stop-loss = buy price - 2.5 x ATR
+  min_atr_pct: 0.3
+  max_atr_pct: 6
+  history_bars: 1000       # candles loaded at start
+  refresh_seconds: 60
+  act_within_minutes: 10   # ignore signals from candles that closed longer ago
+
+# --- Exit rules (separate from the buy rule) -----------------------------
+# R = distance between the buy price and the first stop-loss.
+exits:
+  breakeven_at_r: 1.0        # price 1 R up -> stop moves to the buy price (+ costs)
+  breakeven_buffer_bps: 20
+  trail_atr: 3.0             # then the stop follows the best close at 3 x ATR (only up)
+  stale_after_bars: 48       # sell if the trade has not moved up after 48 candles
+  max_hold_bars: 240         # sell every trade after 240 candles (10 days)
+  exit_on_trend_break: true  # sell when the 4-hour uptrend ends
+
+# --- Backtest (test the strategy on past prices) --------------------------
+# Start with GeriyeTest.bat (Windows) or GeriyeTest.command (Mac).
+# The first 70% of the period is the "learning" part, the last 30% is
+# "unseen" data that shows whether the rule still works.
+backtest:
+  days: 730
+  in_sample_pct: 70
+  slippage_bps: 10           # worse price on every buy and sell (0.10%), on top of the fee
+  cache_dir: data/candles
+  report_file: data/backtest_report.txt
 
 # --- Status output ---------------------------------------------------
 status:

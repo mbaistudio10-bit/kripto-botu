@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cryptobot"
-version = "0.2.0"
-description = "Multi-currency crypto trading bot (Phase 2: risk engine, Telegram, Jarvis link)"
+version = "0.4.0"
+description = "Multi-currency crypto trading bot (Phase 4: trend strategy + backtest, paper trading)"
 requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.9,<4",

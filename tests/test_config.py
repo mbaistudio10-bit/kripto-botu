@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from cryptobot.config import Settings
 from cryptobot.domain.models import MarketType, Symbol, TradingMode
+from tests.conftest import ROOT
 
 
 def test_default_settings_match_user_spec(settings: Settings) -> None:
@@ -74,3 +75,27 @@ def test_symbol_parse() -> None:
     assert str(Symbol.parse(" eth/usdt ")) == "ETH/USDT"
     with pytest.raises(ValueError):
         Symbol.parse("BTCTRY")
+
+
+def test_old_settings_with_test_trigger_still_load() -> None:
+    import yaml
+
+    from cryptobot.config import Settings
+
+    raw = yaml.safe_load((ROOT / "config" / "settings.yaml").read_text(encoding="utf-8"))
+    raw.pop("strategy"), raw.pop("exits"), raw.pop("backtest")
+    raw["test_trigger"] = {"enabled": True, "pairs": ["BTC/TRY"], "every_minutes": 30}
+    s = Settings.model_validate(raw)
+    assert s.strategy.enabled and [str(p) for p in s.strategy.pairs] == ["BTC/TRY", "ETH/TRY"]
+
+
+def test_strategy_pairs_must_be_configured_pairs() -> None:
+    import pytest
+    import yaml
+
+    from cryptobot.config import Settings
+
+    raw = yaml.safe_load((ROOT / "config" / "settings.yaml").read_text(encoding="utf-8"))
+    raw["strategy"]["pairs"] = ["SOL/TRY"]
+    with pytest.raises(ValueError):
+        Settings.model_validate(raw)

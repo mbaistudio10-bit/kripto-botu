@@ -115,3 +115,19 @@ class OrderBook:
         bid, ask = self.depth_quote("bid"), self.depth_quote("ask")
         total = bid + ask
         return (bid - ask) / total if total else Decimal(0)
+
+
+@dataclass(frozen=True, slots=True)
+class Candle:
+    """One closed OHLCV bar. `ts` is the bar's open time (UTC).
+
+    Prices are floats on purpose: candles only feed indicators and the backtest,
+    where speed matters. Account money math stays in Decimal.
+    """
+
+    ts: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float  # base currency units
