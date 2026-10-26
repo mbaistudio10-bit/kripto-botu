@@ -9,3 +9,8 @@ data/*.tmp
 build/
 dist/
 *.spec
+data/candles/
+data/backtest_report.txt
+data/paper_state.json
+data/risk_state.json
+data/events.jsonl
