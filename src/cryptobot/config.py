@@ -108,6 +108,17 @@ class JarvisConfig(_Strict):
     port: int = Field(default=8765, ge=1024, le=65535)
 
 
+class PanelConfig(_Strict):
+    """Control Center: one screen with everything, for the computer and the phone."""
+
+    enabled: bool = True
+    port: int = Field(default=8770, ge=1024, le=65535)
+    # true = phones on the same home Wi-Fi can open it; false = this computer only.
+    home_network: bool = True
+    # Open the panel in the browser when the bot starts.
+    open_on_start: bool = True
+
+
 class PaperConfig(_Strict):
     """Simulated account: fills walk the real order book, nothing is sent to the exchange."""
 
@@ -255,6 +266,7 @@ class Settings(_Strict):
     test_trigger: dict | None = None
     telegram: TelegramConfig = TelegramConfig()
     jarvis: JarvisConfig = JarvisConfig()
+    panel: PanelConfig = PanelConfig()
 
     @field_validator("pairs", mode="before")
     @classmethod

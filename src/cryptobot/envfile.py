@@ -32,7 +32,8 @@ def load_env(path: Path) -> dict[str, str]:
     return values
 
 
-def ensure_keys(path: Path, names: list[str]) -> list[str]:
+def ensure_keys(path: Path, names: list[str],
+                comment: str = "Jarvis keys, created automatically by the bot. Give them only to Jarvis.") -> list[str]:
     """Create random secrets for missing keys and append them to the .env file.
 
     Returns the names that were added. Existing values are never touched.
@@ -43,7 +44,7 @@ def ensure_keys(path: Path, names: list[str]) -> list[str]:
         return []
     target = path if path.exists() or not path.with_name(path.name + ".txt").exists() \
         else path.with_name(path.name + ".txt")
-    lines = ["", "# Jarvis keys, created automatically by the bot. Give them only to Jarvis."]
+    lines = ["", f"# {comment}"]
     lines += [f"{n}={secrets.token_urlsafe(32)}" for n in missing]
     prefix = ""
     if target.exists():

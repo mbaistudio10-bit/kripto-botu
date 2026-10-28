@@ -5,6 +5,8 @@ Jarvis -> bot: a small HTTP API on this computer (default 127.0.0.1:8765).
     GET  /api/v1/health   /api/v1/status   /api/v1/limits
     GET  /api/v1/events?since=<ISO time>&limit=100
     GET  /api/v1/report?period=gün|hafta|ay      (summary for the "X report")
+    GET  /api/v1/overview   everything in one call: status, health score, reports,
+                            limits, recent events, last backtest (same as the panel)
   Control key only (JARVIS_CONTROL_KEY):
     POST /api/v1/control/stop    {"reason": "..."}   emergency: no new positions
     POST /api/v1/control/resume                      lifts only a stop Jarvis made
@@ -54,7 +56,9 @@ class JarvisApi:
         read_key: str,
         control_key: str | None,
         utc_offset_hours: int = 3,
+        overview: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
+        self._overview = overview
         if len(read_key) < MIN_KEY_LENGTH or (control_key is not None and len(control_key) < MIN_KEY_LENGTH):
             raise ValueError("Jarvis keys must be at least 16 characters")
         if control_key is not None and hmac.compare_digest(read_key, control_key):
@@ -95,6 +99,7 @@ class JarvisApi:
             web.get(f"{API_PREFIX}/limits", self.limits),
             web.get(f"{API_PREFIX}/events", self.events),
             web.get(f"{API_PREFIX}/report", self.report),
+            web.get(f"{API_PREFIX}/overview", self.overview),
             web.post(f"{API_PREFIX}/control/stop", self.stop),
             web.post(f"{API_PREFIX}/control/resume", self.resume),
         ])
@@ -124,6 +129,11 @@ class JarvisApi:
             return _json({"error": "bad since/limit"}, 400)
         found = list(self._events.read_since(since))[-limit:]
         return _json({"events": [e.to_json() for e in found]})
+
+    async def overview(self, request: web.Request) -> web.Response:
+        if self._overview is None:
+            return _json({"error": "overview not available"}, 404)
+        return _json(self._overview())
 
     async def report(self, request: web.Request) -> web.Response:
         period = request.query.get("period", "gün")

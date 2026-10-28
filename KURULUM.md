@@ -104,6 +104,7 @@ Bot ilk açılışta `.env` dosyasına Jarvis için iki anahtar yazar:
 Bu anahtarları sadece Jarvis'e verin. Jarvis'in yapabildikleri:
 - Durumu, kazanç raporunu ve olayları okumak ("X raporu" için)
 - Acil durumda yeni işlemleri durdurmak, kendi durdurmasını kaldırmak
+- Her şeyi tek seferde almak (Kontrol Merkezi'ndeki bilgilerin hepsi: durum, sağlık puanı, raporlar, olaylar)
 
 Jarvis'in **yapamadıkları:** emir göndermek, limit değiştirmek, sizin yaptığınız durdurmayı veya zarar limiti/acil durdurmayı kaldırmak.
 Jarvis botu her durdurduğunda size Telegram'dan haber gelir.
@@ -193,8 +194,41 @@ Tüm ayrıntılar `data/backtest_report.txt` dosyasındadır.
 
 ---
 
-## 8. Dosyalar nerede?
-- `.env`: gizli anahtarlar (kimseyle paylaşmayın)
+## 8. Kontrol Merkezi: bilgisayar ve telefon (Faz 5)
+
+Botun her şeyi tek ekranda: bakiye (TL ve USD), açık pozisyonlar, kazanç raporu (gün/hafta/ay),
+son olaylar, zarar sınırları, strateji kararları, son test raporu, **sistem sağlık puanı**, Jarvis bağlantısı
+ve her şeyin anlatıldığı bir **Rehber**. **Acil durdur** ve **Devam ettir** düğmeleri de burada.
+
+**Bilgisayarda (Windows):**
+1. Botu başlatın. Kontrol Merkezi tarayıcıda kendiliğinden açılır.
+   (Açılmazsa siyah penceredeki "Bu bilgisayarda" bağlantısını tarayıcıya yapıştırın.)
+2. Windows "erişime izin ver" diye sorarsa **Özel ağlar** için izin verin (telefonun bağlanabilmesi için).
+3. Uygulama gibi kullanmak için: Edge'de sağ üstteki **⋯ → Uygulamalar → Bu siteyi uygulama olarak yükle**
+   (Chrome'da: adres çubuğundaki **yükle** simgesi). Masaüstünde ve başlat menüsünde "Kripto Botu" simgesi olur.
+
+**Telefonda:**
+1. Telefon, bilgisayarla **aynı ev Wi-Fi'ına** bağlı olsun.
+2. Telegram'da Achilles'e `/panel` yazın; gelen "Telefonda" bağlantısına dokunun.
+3. Ana ekrana ekleyin: **iPhone (Safari):** paylaş düğmesi → **Ana Ekrana Ekle**.
+   **Android (Chrome):** ⋮ menüsü → **Ana ekrana ekle**.
+4. Artık ana ekrandaki "Kripto Botu" simgesine dokunarak açabilirsiniz. İlk açılıştan sonra anahtar hatırlanır.
+
+Evden uzaktayken Kontrol Merkezi açılmaz (güvenlik için sadece ev ağında çalışır); o zaman Telegram ve Jarvis kullanılır.
+
+**Sistem sağlık puanı:** 7 parça 10 üzerinden puanlanır: risk korumaları, zarar sınırlarına uzaklık, fiyat verisi,
+dolar kuru, strateji verisi, telefon bildirimleri, Jarvis. Hedef her parçada **8 ve üstü**.
+Bir parça hedefin altına düşerse ekranda kırmızı/sarı görünür ve nedeni yazar.
+Bu puan sistemin güvenli ve eksiksiz çalıştığını ölçer; **kâr garantisi değildir.**
+
+**Güvenlik:** Kontrol Merkezi `.env` dosyasındaki `PANEL_KEY` anahtarıyla açılır (bot ilk açılışta kendisi oluşturur).
+Bu anahtarı ve `/panel` mesajını kimseyle paylaşmayın. Üst üste 10 yanlış anahtar denenirse o cihaz 15 dakika engellenir.
+Kontrol Merkezi emir veremez ve limit değiştiremez. Anahtarı değiştirmek için `.env` içindeki `PANEL_KEY` satırını silip botu yeniden başlatın.
+
+---
+
+## 9. Dosyalar nerede?
+- `.env`: gizli anahtarlar: Telegram, Jarvis, Kontrol Merkezi (kimseyle paylaşmayın)
 - `logs/bot.log`: teknik kayıtlar (bir sorun olursa bunu bana gönderin, `.env`'yi değil)
 - `data/events.jsonl`: tüm uyarı ve olayların kaydı
 - `data/risk_state.json`: durdurmaların ve limitlerin hafızası

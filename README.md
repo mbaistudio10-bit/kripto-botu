@@ -89,6 +89,7 @@ Send `Authorization: Bearer <key>`.
 | GET | `/api/v1/health`, `/api/v1/status`, `/api/v1/limits` | read or control |
 | GET | `/api/v1/events?since=<ISO-8601>&limit=100` | read or control |
 | GET | `/api/v1/report?period=gün\|hafta\|ay` (categories: Kazanç, Kripto birimleri, Al-sat işlemleri + Turkish `text`) | read or control |
+| GET | `/api/v1/overview`: status + `health` score + `reports` (gün/hafta/ay) + `limits_text` + last 50 `events` + `backtest` summary | read or control |
 | POST | `/api/v1/control/stop` body `{"reason": "..."}` | control |
 | POST | `/api/v1/control/resume` | control |
 
@@ -101,9 +102,17 @@ curl -H "Authorization: Bearer $JARVIS_READ_KEY" "http://127.0.0.1:8765/api/v1/r
 curl -X POST -H "Authorization: Bearer $JARVIS_CONTROL_KEY" -d '{"reason":"acil"}' http://127.0.0.1:8765/api/v1/control/stop
 ```
 
+## Control Center (panel)
+Served on port 8770 (config `panel`; `home_network: true` binds 0.0.0.0 so a phone on the same Wi-Fi can open it).
+`PANEL_KEY` is generated into `.env`; links carry it after `#k=` so it never reaches a server log.
+`GET /panel/api/state` (same JSON as Jarvis `/overview`), `POST /panel/api/stop`, `POST /panel/api/resume`
+(`{"confirm": true}` also lifts a drawdown halt). No order or limit endpoints. 10 wrong keys per address → 15 min lockout.
+The page is self-contained HTML/JS (no external scripts), with a web manifest and service worker for "install as app".
+
 ## Roadmap
 1. Skeleton, config, exchange adapter, market data (done)
 2. Risk engine, kill switch, Telegram alerts/commands, Jarvis link (done)
 3. Paper trading + PnL in TRY and USD (done)
-4. Simple trend strategy + backtest (this)
-5. Phone status page
+4. Simple trend strategy + backtest (done)
+5. Control Center (this): one-screen web app for PC and phone (installable), health score, Jarvis overview
+

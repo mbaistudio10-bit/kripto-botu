@@ -45,6 +45,10 @@ _LIMIT_LABELS = {
 }
 
 
+# Who pressed stop/resume, as shown in the alert.
+_WHO = {"owner": "Siz (Telegram)", "panel": "Siz (Kontrol Merkezi)", "jarvis": "Jarvis"}
+
+
 class HaltLevel(IntEnum):
     NORMAL = 0
     NO_NEW_POSITIONS = 1
@@ -262,13 +266,14 @@ class RiskEngine:
         return self.halt_level is HaltLevel.CLOSE_ALL
 
     def stop(self, reason: str, by: str = "owner") -> str:
-        """Manual kill switch level 1. `by` is "owner" (Telegram) or "jarvis"."""
+        """Manual kill switch level 1. `by` is "owner" (Telegram), "panel" (the owner's
+        Control Center) or "jarvis"."""
         if self._state.manual_stop:
             return "Bot zaten durdurulmuş durumda."
         self._state.manual_stop = reason
         self._state.manual_stop_by = by
         self._save()
-        who = "Jarvis" if by == "jarvis" else "Siz (Telegram)"
+        who = _WHO.get(by, "Siz (Telegram)")
         self._events.emit(
             Level.UYARI,
             "manual_stop",
@@ -284,6 +289,9 @@ class RiskEngine:
     def resume(self, confirm: bool = False, by: str = "owner") -> str:
         """The owner can clear manual and delist halts (and drawdown with confirm).
         Jarvis can only lift a stop that Jarvis itself made."""
+        who = _WHO.get(by, "Siz (Telegram)")
+        if by == "panel":
+            by = "owner"  # the panel is the owner's own screen
         s = self._state
         notes: list[str] = []
         cleared: list[str] = []
@@ -292,7 +300,7 @@ class RiskEngine:
                 s.manual_stop = s.manual_stop_by = None
                 cleared.append("Jarvis'in durdurması")
             elif s.manual_stop:
-                notes.append("Bu durdurmayı sahibi yaptı; sadece Telegram'dan /devam ile kaldırılabilir.")
+                notes.append("Bu durdurmayı sahibi yaptı; sadece sahibi (Telegram /devam veya Kontrol Merkezi) kaldırabilir.")
             if s.drawdown_halt or s.delist_halts:
                 notes.append("Acil durdurma ve listeden çıkma güvenli modunu sadece sahibi kaldırabilir.")
             confirm = False
@@ -319,7 +327,6 @@ class RiskEngine:
             notes.append("Günlük zarar limiti doldu; gece 00:00'da kendiliğinden açılacak, elle kaldırılamaz.")
         self._save()
         if cleared:
-            who = "Jarvis" if by == "jarvis" else "Siz (Telegram)"
             self._events.emit(
                 Level.UYARI, "resumed", f"{who} devam ettirdi: " + ", ".join(cleared) + ".",
                 notify=True, key=by, by=by,

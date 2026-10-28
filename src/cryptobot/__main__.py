@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import logging
 import sys
+import webbrowser
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -16,6 +17,7 @@ from pydantic import ValidationError
 import aiohttp
 
 from cryptobot.api.jarvis import JarvisApi, JarvisWebhook, start_api
+from cryptobot.api.panel import PanelApi, backtest_summary, build_overview, panel_links, start_panel
 from cryptobot.backtest.run import run_backtest, send_to_telegram
 from cryptobot.config import Settings, load_settings
 from cryptobot.domain.models import TradingMode
@@ -23,6 +25,7 @@ from cryptobot.envfile import ensure_env_file, ensure_keys, load_env
 from cryptobot.events import ErrorEventHandler, EventLog, Level
 from cryptobot.exchanges.base import ExchangeAdapter, ExchangeError
 from cryptobot.exchanges.registry import create_adapter
+from cryptobot.health import Links, health
 from cryptobot.market_data.candles import CandleService
 from cryptobot.market_data.fx import FxRateService
 from cryptobot.market_data.service import MarketDataService, check_pairs
@@ -39,8 +42,8 @@ log = logging.getLogger("cryptobot")
 
 DISCLAIMER = (
     "Bu yazılım yatırım tavsiyesi değildir. Geçmiş performans gelecekteki getiriyi "
-    "garanti etmez. Faz 4: trend stratejisiyle sahte parayla deneme işlemleri yapar, "
-    "borsaya hiçbir emir göndermez."
+    "garanti etmez. Faz 5: trend stratejisiyle sahte parayla deneme işlemleri yapar, "
+    "Kontrol Merkezi'nden izlenir, borsaya hiçbir emir göndermez."
 )
 
 
@@ -70,7 +73,8 @@ async def startup_check(adapter: ExchangeAdapter, settings: Settings) -> list:
 
 
 def setup_telegram(
-    settings: Settings, events: EventLog, engine: RiskEngine, snapshot_fn, session: aiohttp.ClientSession
+    settings: Settings, events: EventLog, engine: RiskEngine, snapshot_fn, session: aiohttp.ClientSession,
+    panel_text=None,
 ) -> TelegramBot | None:
     cfg = settings.telegram
     if not cfg.enabled:
@@ -98,11 +102,13 @@ def setup_telegram(
         cfg, api, chat_id, engine, events,
         status_text=lambda: render_telegram(snapshot_fn(), settings.risk.reset_utc_offset_hours),
         report_text=report_text,
+        panel_text=panel_text,
     )
 
 
 def setup_jarvis(
-    settings: Settings, events: EventLog, engine: RiskEngine, snapshot_fn, session: aiohttp.ClientSession
+    settings: Settings, events: EventLog, engine: RiskEngine, snapshot_fn, session: aiohttp.ClientSession,
+    overview_fn=None,
 ) -> tuple[JarvisApi | None, JarvisWebhook | None]:
     cfg = settings.jarvis
     if not cfg.enabled:
@@ -119,7 +125,7 @@ def setup_jarvis(
     env = load_env(env_path)
     try:
         api = JarvisApi(engine, events, snapshot_fn, env["JARVIS_READ_KEY"], env.get("JARVIS_CONTROL_KEY"),
-                        settings.risk.reset_utc_offset_hours)
+                        settings.risk.reset_utc_offset_hours, overview=overview_fn)
     except (KeyError, ValueError) as exc:
         print(f"Jarvis bağlantısı kapalı: anahtarlar hatalı ({exc}).")
         return None, None
@@ -128,6 +134,32 @@ def setup_jarvis(
         webhook = JarvisWebhook(env["JARVIS_WEBHOOK_URL"], env["JARVIS_READ_KEY"], session)
         events.subscribe(webhook.on_event)
     return api, webhook
+
+
+def setup_panel(settings: Settings, events: EventLog, engine: RiskEngine, overview_fn) -> PanelApi | None:
+    if not settings.panel.enabled:
+        return None
+    env_path = settings.telegram.env_file
+    try:
+        ensure_keys(env_path, ["PANEL_KEY"],
+                    "Control Center key, created automatically. It opens your panel; do not share it.")
+        return PanelApi(engine, events, overview_fn, load_env(env_path)["PANEL_KEY"],
+                        settings.risk.reset_utc_offset_hours)
+    except (OSError, KeyError, ValueError) as exc:
+        print(f"Kontrol Merkezi açılamadı: {exc}")
+        return None
+
+
+def panel_text(settings: Settings) -> str:
+    key = load_env(settings.telegram.env_file).get("PANEL_KEY", "")
+    lines = ["📱 Kontrol Merkezi bağlantıları (bu mesajı kimseyle paylaşmayın):"]
+    for where, link in panel_links(key, settings.panel.port, settings.panel.home_network):
+        lines.append(f"{where}: {link}")
+    lines.append("Açtıktan sonra tarayıcı menüsünden 'Ana ekrana ekle' (telefon) veya "
+                 "'Uygulama olarak yükle' (bilgisayar) seçin.")
+    if settings.panel.home_network:
+        lines.append("Telefon, bilgisayarla aynı ev Wi-Fi'ında olmalı.")
+    return "\n".join(lines)
 
 
 async def _refresh_listing(adapter: ExchangeAdapter, settings: Settings, engine: RiskEngine) -> None:
@@ -191,16 +223,33 @@ async def run(settings: Settings, once: bool) -> int:
         runner = StrategyRunner(trader, engine, candles, TrendBreakoutStrategy(settings.strategy),
                                 settings.strategy, settings.exits, events, pairs)
 
+        links = Links()
+        jarvis_running = False
+
         def snapshot() -> dict:
             snap = build_snapshot(settings, md, fx, started_at, engine.evaluate(), portfolio.snapshot())
             if settings.strategy.enabled:
                 snap["strategy"] = runner.snapshot()
+            snap["health"] = health(settings, snap, links)
             return snap
+
+        def state() -> dict:
+            snap = snapshot()
+            snap["backtest"] = backtest_summary(settings.backtest.report_file)
+            snap["jarvis"] = {
+                "enabled": settings.jarvis.enabled, "running": jarvis_running, "webhook": links.jarvis_webhook,
+                "url": f"http://{settings.jarvis.host}:{settings.jarvis.port}/api/v1" if jarvis_running else None,
+            }
+            return snap
+
+        def overview() -> dict:
+            return build_overview(engine, events, state, settings.risk.reset_utc_offset_hours)
 
         tasks = [asyncio.create_task(md.run(), name="market-data")]
         session = aiohttp.ClientSession()
         telegram: TelegramBot | None = None
         jarvis_runner = None
+        panel_runner = None
         shutdown_note = "⚪ Kripto Botu kapatıldı. Yeni işlem açılmıyor, izleme durdu."
         try:
             if once:
@@ -219,15 +268,32 @@ async def run(settings: Settings, once: bool) -> int:
                 if ensure_env_file(settings.telegram.env_file):
                     print(f"Gizli ayar dosyası oluşturuldu: {settings.telegram.env_file.resolve()} "
                           "(Telegram anahtarınızı buraya yazacaksınız, KURULUM.md bölüm 3).")
-            telegram = setup_telegram(settings, events, engine, snapshot, session)
-            jarvis_api, jarvis_hook = setup_jarvis(settings, events, engine, snapshot, session)
+            panel = setup_panel(settings, events, engine, state)
+            telegram = setup_telegram(settings, events, engine, snapshot, session,
+                                      (lambda: panel_text(settings)) if panel is not None else None)
+            jarvis_api, jarvis_hook = setup_jarvis(settings, events, engine, snapshot, session, overview)
             if jarvis_api is not None:
                 try:
                     jarvis_runner = await start_api(jarvis_api, settings.jarvis.host, settings.jarvis.port)
+                    jarvis_running = True
                     print(f"Jarvis bağlantısı açık: http://{settings.jarvis.host}:{settings.jarvis.port}/api/v1 "
                           "(durum okuma + acil durdurma, emir yok).")
                 except OSError as exc:
                     print(f"Jarvis bağlantısı açılamadı (port {settings.jarvis.port} dolu olabilir): {exc}")
+            env = load_env(settings.telegram.env_file)
+            links = Links(telegram_token=telegram is not None,
+                          telegram_chat=parse_chat_id(env.get("TELEGRAM_CHAT_ID")) is not None,
+                          jarvis_api=jarvis_running, jarvis_webhook=jarvis_hook is not None)
+            if panel is not None:
+                host = "0.0.0.0" if settings.panel.home_network else "127.0.0.1"
+                try:
+                    panel_runner = await start_panel(panel, host, settings.panel.port)
+                    print("\n" + panel_text(settings) + "\n")
+                    if settings.panel.open_on_start:
+                        with contextlib.suppress(Exception):
+                            webbrowser.open(panel_links(env.get("PANEL_KEY", ""), settings.panel.port, False)[0][1])
+                except OSError as exc:
+                    print(f"Kontrol Merkezi açılamadı (port {settings.panel.port} dolu olabilir): {exc}")
             if jarvis_hook is not None:
                 tasks.append(asyncio.create_task(jarvis_hook.run(), name="jarvis-webhook"))
             tasks.append(asyncio.create_task(_refresh_listing(adapter, settings, engine)))
@@ -272,6 +338,8 @@ async def run(settings: Settings, once: bool) -> int:
                 await telegram.send_now(shutdown_note)
             if jarvis_runner is not None:
                 await jarvis_runner.cleanup()
+            if panel_runner is not None:
+                await panel_runner.cleanup()
             await session.close()
 
 

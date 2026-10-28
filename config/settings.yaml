@@ -178,3 +178,14 @@ jarvis:
   enabled: true
   host: 127.0.0.1   # only programs on this computer can connect
   port: 8765
+
+# --- Control Center (Phase 5) ------------------------------------------
+# One screen with everything: balance, positions, trades, limits, health
+# score, emergency stop. Opens in the browser; can be installed as an app
+# on the computer and added to the phone's home screen. The key is created
+# in .env (PANEL_KEY); Telegram /panel sends you the links.
+panel:
+  enabled: true
+  port: 8770
+  home_network: true    # true = phone on the same home Wi-Fi can open it
+  open_on_start: true   # open the panel in the browser when the bot starts
