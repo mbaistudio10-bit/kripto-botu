@@ -214,6 +214,30 @@ class PaperPortfolio:
         self.save()
         return ClosedTrade(pos.trade_id, symbol, pos.quantity, price, pnl_try, pnl_usd)
 
+    def convert_cash(self, target: str, fee_bps: Decimal) -> list[tuple[str, Decimal, Decimal]]:
+        """Change every other cash balance into `target` at the live rate, minus the fee.
+
+        Returns (currency, amount sold, target amount received) per conversion.
+        A balance without a fresh rate waits for the next call.
+        """
+        done = []
+        unit_try = self.to_risk(Decimal(1), target)
+        for ccy, amount in list(self.balances.items()):
+            if ccy == target or amount <= 0 or not unit_try:
+                continue
+            value_try = self.to_risk(amount, ccy)
+            if value_try is None:
+                continue
+            fee_try = value_try * fee_bps / 10_000
+            got = (value_try - fee_try) / unit_try
+            del self.balances[ccy]
+            self.balances[target] = self.balances.get(target, Decimal(0)) + got
+            self.fees_try += fee_try
+            done.append((ccy, amount, got))
+        if done:
+            self.save()
+        return done
+
     # ------------------------------------------------------------ views
 
     def snapshot(self) -> dict[str, Any]:

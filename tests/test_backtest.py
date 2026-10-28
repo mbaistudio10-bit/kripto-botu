@@ -221,7 +221,10 @@ async def test_run_backtest_writes_report(settings: Settings, tmp_path) -> None:
     assert full.startswith("📈") and "AYRINTILAR" in full and "Dolar bazında" in full
     assert "kural karşılaştırması" in text and "şu anki ayarlar" in text
     assert "Günlük mum" in text and "4 saatlik mum" in text and "1 saatlik mum" in text
-    assert text.count("dolar çiftleri (BTC/USDT, ETH/USDT)") == 3  # every rule set, also in dollars
+    rows = [line for line in text.splitlines() if line[:2] in {f"{n})" for n in range(1, 10)}]
+    # The bot's dollar pairs first, then every rule set also on the TL pairs.
+    assert [r.endswith("dolar çiftleri (BTC/USDT, ETH/USDT)") for r in rows] == [True, False] * 3
+    assert all(r.endswith("TL çiftleri (BTC/TRY, ETH/TRY)") for r in rows[1::2])
     assert "Hesap dolar (USDT) olarak tutuldu" in full and "TL bazında" in full
     assert "sadece dolar (USDT) tutmak" in text and "garanti etmez" in text
     assert len(text) < 4000  # one Telegram message
@@ -280,3 +283,14 @@ def test_dollar_account_must_make_dollars_to_pass(settings: Settings) -> None:
 
     assert "Hiçbir kural" in comparison_verdict([(v, result(-0.05), result(-0.05))])
     assert "her iki dönemde" in comparison_verdict([(v, result(0.05), result(0.05))])
+
+
+def test_tl_account_must_beat_holding_dollars(settings: Settings) -> None:
+    from cryptobot.backtest.engine import BtResult, BtTrade
+    from cryptobot.backtest.variants import variants
+
+    v = variants(settings.strategy, settings.exits)[0]
+    # +10% in TL, but the dollar rose 20% against TL: holding USDT would have been better.
+    r = BtResult("x", T0, T0 + H, 10_000.0, 11_000.0, usd_start=250.0, usd_end=250.0 * 1.1 / 1.2)
+    r.trades = [BtTrade(BTC, T0, T0, 1, 1, 1, 1.0 if i % 3 else -0.5, 0, 0, "", "") for i in range(20)]
+    assert "Hiçbir kural" in comparison_verdict([(v, r, r)])

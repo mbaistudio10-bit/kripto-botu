@@ -19,12 +19,17 @@ primary_quote_currencies: [TRY, USDT]
 supported_assets: [TRY, USDT, USD, BTC, ETH]
 
 # --- Pairs -----------------------------------------------------------
+# The bot trades the dollar pairs. The TL pairs are only watched;
+# USDT/TRY also gives the dollar rate used to show everything in TL.
 pairs:
+  - BTC/USDT
+  - ETH/USDT
   - BTC/TRY
   - ETH/TRY
   - USDT/TRY
 
 # --- Paper account ---------------------------------------------------
+# The 10,000 TL is changed into dollars (USDT) at the start, see paper.cash_currency.
 starting_capital: 10000
 starting_capital_currency: TRY
 
@@ -85,6 +90,11 @@ paper:
   fee_bps: 10              # fee per buy and per sell (10 = 0.10%)
   max_position_pct: 45     # one position uses at most 45% of the account
   check_every_seconds: 2   # how often stop-loss / target are checked
+  # Idle money is kept in dollars (USDT): in the backtest (October 2026) TL
+  # lost value against the dollar, and the dollar pairs did better.
+  # TL money (the starting capital, an old TL trade) is changed into USDT
+  # once at the live rate, paying the fee.
+  cash_currency: USDT
 
 # --- Strategy (Phase 4): trend breakout ---------------------------------
 # Buys only when ALL are true at the close of a candle:
@@ -98,7 +108,7 @@ paper:
 # backtest (October 2026). The first setting was 1-hour candles + 4-hour trend.
 strategy:
   enabled: true
-  pairs: [BTC/TRY, ETH/TRY]
+  pairs: [BTC/USDT, ETH/USDT]  # must be priced in paper.cash_currency
   bar_minutes: 240         # 4-hour candles (60 = 1 hour, 1440 = daily)
   trend_bar_minutes: 1440  # daily candles for the big-picture trend
   trend_ema_fast: 20
@@ -133,10 +143,9 @@ backtest:
   slippage_bps: 10           # worse price on every buy and sell (0.10%), on top of the fee
   drawdown_pause_days: 7     # after an emergency stop: pause 7 days, then continue (0 = stop the test)
   compare_variants: true     # also test the other 2 fixed rule sets (1-hour and daily candles)
-  # Same rules on dollar pairs: idle money is kept in USDT instead of TL.
-  # Only the test uses these; the paper bot keeps trading the TL pairs above.
-  compare_usdt: true
-  usdt_pairs: [BTC/USDT, ETH/USDT]
+  # Every rule is also tested on these TL pairs (idle money kept in TL),
+  # so you can see side by side whether dollars still do better. [] = off.
+  compare_pairs: [BTC/TRY, ETH/TRY]
   cache_dir: data/candles
   report_file: data/backtest_report.txt
 

@@ -182,8 +182,9 @@ async def run(settings: Settings, once: bool) -> int:
             engine.stop("Deneme hesabı dosyası (data/paper_state.json) okunamadı")
         elif portfolio.restored:
             print(f"Deneme hesabı kaldığı yerden devam ediyor: {len(portfolio.positions)} açık pozisyon.")
-        trader = PaperTrader(portfolio, engine, md, events, settings.paper)
         strategy_pairs = [p for p in settings.strategy.pairs if p in pairs]
+        trader = PaperTrader(portfolio, engine, md, events, settings.paper,
+                             set(settings.strategy.pairs) if settings.strategy.enabled else None)
         candles = CandleService(adapter, strategy_pairs, settings.strategy.bar_minutes,
                                 settings.strategy.history_bars, settings.strategy.refresh_seconds,
                                 None if once else settings.backtest.cache_dir)

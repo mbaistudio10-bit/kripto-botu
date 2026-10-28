@@ -119,7 +119,13 @@ Alış ve satışlar OKX'teki gerçek fiyat ve emir defterine göre, komisyon (%
 Faz 3'teki "deneme tetikleyicisi" kaldırıldı; yerine basit bir **trend takip stratejisi** geldi.
 Geçmiş veri testinde en istikrarlı çıkan **4 saatlik mum + günlük trend** ayarı kullanılıyor (ilk ayar 1 saatlik mumdu).
 
-**Ne zaman alır?** (BTC/TRY ve ETH/TRY, her 4 saatlik mum kapanınca bakar: Türkiye saatiyle 03:00, 07:00, 11:00, 15:00, 19:00, 23:00) Hepsi aynı anda doğruysa:
+**Dolar çiftleri (Ekim 2026'dan beri):** Bot **BTC/USDT ve ETH/USDT** ile işlem yapar, boştaki para **dolar (USDT)** olarak durur.
+Testte TL dolar karşısında değer kaybettiği için dolar çiftleri TL çiftlerinden iyi çıktı.
+Bot ilk açılışta 10.000 TL'lik deneme parasını o anki kurla USDT'ye çevirir (komisyon bir kez ödenir, 💱 mesajı gelir).
+Eski bir TL pozisyonu açık kaldıysa bot onu ilk fırsatta satar ve parayı da USDT'ye çevirir.
+Bakiye ve kâr yine **TL ve USD** olarak gösterilir. TL çiftleri sadece izlenir; USDT/TRY dolar kurunu verir.
+
+**Ne zaman alır?** (BTC/USDT ve ETH/USDT, her 4 saatlik mum kapanınca bakar: Türkiye saatiyle 03:00, 07:00, 11:00, 15:00, 19:00, 23:00) Hepsi aynı anda doğruysa:
 1. **Büyük resim yukarı:** günlük mumlarda fiyat ortalamasının üstünde ve kısa ortalama uzun ortalamanın üstünde.
 2. Fiyat 4 saatlik ortalamasının üstünde.
 3. **Kırılım:** fiyat son 20 mumun (yaklaşık 3 günün) en yüksek seviyesinin üstünde kapandı.
@@ -142,7 +148,7 @@ Risk kuralı izin vermezse alış yapmaz ve size nedenini yazar (en fazla 30 dak
 - `/durdur`: yeni alışları durdurur. **Açık pozisyonların stop ve satış kuralları çalışmaya devam eder.**
 - Zirveden %10 düşüş olursa bot tüm deneme pozisyonlarını kendisi kapatır.
 
-USD kazancı, alış ile satış arasındaki dolar kuru değişimini de içerir. Bu yüzden TL'de kâr, USD'de daha az görünebilir.
+Para dolarda durduğu için dolar kuru yükselince TL bakiye de yükselir, işlem olmasa bile. Asıl başarı ölçüsü **USD** sonucudur.
 Hesap bot kapatılıp açılınca kaldığı yerden devam eder (`data/paper_state.json`).
 Deneme hesabını sıfırdan başlatmak isterseniz: botu kapatın, bu dosyayı silin, botu açın.
 Stratejiyi kapatmak için `config/settings.yaml` içinde `strategy` → `enabled: false`.
@@ -165,10 +171,11 @@ Test **3 kuralı yan yana** dener. Hepsi aynı fikir (trend + kırılım), sadec
 3. Günlük mum, günlük trend (en yavaş)
 
 Her kural iki kez denenir:
-- **TL çiftleriyle** (BTC/TRY, ETH/TRY): boştaki para TL olarak durur.
-- **Dolar çiftleriyle** (BTC/USDT, ETH/USDT): aynı 10.000 TL başta dolara (USDT) çevrilir, boştaki para dolar olarak durur.
-  Sonuç yine hem TL hem USD olarak yazılır. Dolar çiftlerinde bir kural ancak **dolar olarak da** kâr ettiyse "kârlı" sayılır.
-  (Deneme botu şimdilik TL çiftleriyle çalışmaya devam eder; dolar çiftleri sadece bu testte kullanılır.)
+- **Dolar çiftleriyle** (BTC/USDT, ETH/USDT, botun şu an kullandığı): aynı 10.000 TL başta dolara (USDT) çevrilir, boştaki para dolar olarak durur.
+- **TL çiftleriyle** (BTC/TRY, ETH/TRY, karşılaştırma için): boştaki para TL olarak durur.
+
+Sonuç hem TL hem USD olarak yazılır. Bir kural ancak **dolar olarak da** kâr ettiyse "kârlı" sayılır;
+yani paranızı hiç işlem yapmadan dolarda tutmaktan daha iyi olmalı. Sadece TL'nin değer kaybından gelen kâr sayılmaz.
 
 Bu ayarlar önceden sabitlendi; sonuca bakıp değiştirilmedi. Her kural için iki satır vardır:
 - **Öğrenme dönemi** (ilk %70)

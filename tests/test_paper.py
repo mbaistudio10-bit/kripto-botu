@@ -45,7 +45,9 @@ class Rig:
         self.engine = RiskEngine(settings, self.md, self.fx, self.portfolio, self.events,
                                  tmp_path / "risk_state.json", started_at=self.now - timedelta(hours=1))
         self.engine.evaluate(self.now)
-        self.trader = PaperTrader(self.portfolio, self.engine, self.md, self.events, settings.paper)
+        # These tests trade TL pairs, so idle money stays in TL.
+        self.paper_cfg = settings.paper.model_copy(update={"cash_currency": "TRY"})
+        self.trader = PaperTrader(self.portfolio, self.engine, self.md, self.events, self.paper_cfg)
 
     def buy(self, sym: Symbol = BTC, note: str | None = None) -> list[str]:
         return self.trader.open(sym, Decimal(1), Decimal("1.5"), self.now, note=note)
@@ -179,3 +181,54 @@ def test_snapshot_has_try_and_usd(rig: Rig) -> None:
     snap = rig.portfolio.snapshot()
     assert Decimal(snap["equity_usd"]) == pytest.approx(Decimal(snap["equity_try"]) / 35, rel=Decimal("1e-3"))
     assert snap["positions"][0]["pair"] == "BTC/TRY"
+
+
+def test_idle_tl_is_changed_into_dollars_once(rig: Rig) -> None:
+    trader = PaperTrader(rig.portfolio, rig.engine, rig.md, rig.events, rig.settings.paper)
+    trader.step(rig.now)
+    pf = rig.portfolio
+    assert set(pf.balances) == {"USDT"}
+    # 10,000 TL at 35 TL per USDT, minus the 0.10% fee.
+    assert pf.balances["USDT"] == pytest.approx(Decimal(10000) / 35 * Decimal("0.999"))
+    assert pf.fees_try == pytest.approx(Decimal(10))
+    assert pf.equity() == pytest.approx(Decimal(9990))
+    assert rig.kinds().count("cash_converted") == 1
+    trader.step(rig.now)
+    assert rig.kinds().count("cash_converted") == 1
+    assert "USDT" in rig.new_portfolio().balances  # saved
+
+
+def test_idle_tl_waits_for_a_dollar_rate(rig: Rig) -> None:
+    rig.md._tickers.pop(USDT)
+    trader = PaperTrader(rig.portfolio, rig.engine, rig.md, rig.events, rig.settings.paper)
+    trader.step(rig.now)
+    assert rig.portfolio.balances == {"TRY": Decimal(10000)}
+
+
+def test_position_on_a_pair_no_longer_traded_is_sold(rig: Rig) -> None:
+    assert rig.buy() == []
+    trader = PaperTrader(rig.portfolio, rig.engine, rig.md, rig.events, rig.paper_cfg, {ETH})
+    trader.step(rig.now)
+    assert not rig.portfolio.positions
+    closed = [e for e in rig.seen if e.kind == TRADE_CLOSED]
+    assert len(closed) == 1 and "ayar değişti" in closed[0].message
+
+
+def test_dollar_pair_is_bought_with_dollars(rig: Rig) -> None:
+    btc_usdt = Symbol("BTC", "USDT")
+    md = MarketDataService(FakeAdapter({}), [btc_usdt, USDT], rig.settings.market_data)
+    fx = FxRateService(md, rig.settings.fx)
+    set_price(md, USDT, "35", rig.now)
+    set_price(md, btc_usdt, "100000", rig.now, depth_try="30000")  # 30,000 USDT ≈ 1M TL each side
+    pf = PaperPortfolio(Decimal(10000), "TRY", "TRY", md, fx, None)
+    engine = RiskEngine(rig.settings, md, fx, pf, rig.events, None,
+                        started_at=rig.now - timedelta(hours=1))
+    engine.evaluate(rig.now)
+    trader = PaperTrader(pf, engine, md, rig.events, rig.settings.paper, {btc_usdt})
+    trader.step(rig.now)
+    assert trader.open(btc_usdt, Decimal(1), None, rig.now) == []
+    pos = pf.positions[btc_usdt]
+    assert pos.cost_try == pytest.approx(pos.cost * 35)
+    assert pf.balances["USDT"] == pytest.approx(Decimal(10000) / 35 * Decimal("0.999") - pos.cost)
+    opened = [e for e in rig.seen if e.kind == TRADE_OPENED][-1]
+    assert "USDT\n" in opened.message and "TL" in opened.message

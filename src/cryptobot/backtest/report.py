@@ -132,9 +132,9 @@ def _hold_pct(fx: list[Candle] | None, r: BtResult) -> float | None:
 
 
 def _own_return(r: BtResult, m: Metrics) -> float:
-    """Return in the account's own money: a dollar account must make dollars,
-    not just gain from the TL losing value."""
-    if r.quote != "TRY" and m.usd_return_pct is not None:
+    """Return in dollars: the same as the gain over just holding USDT. A rule
+    that only gains from the TL losing value is no better than holding dollars."""
+    if m.usd_return_pct is not None:
         return m.usd_return_pct
     return m.total_return_pct
 
@@ -148,19 +148,18 @@ def comparison_verdict(results: list) -> str:
             if b.trades < 10:
                 few.append((v, b))
             elif _own_return(is_, a) > 0:
-                good.append((v, b))
+                good.append((v, b, oos))
     if good:
-        v, b = max(good, key=lambda x: x[1].total_return_pct)
-        text = (f"\"{v.label}\" her iki dönemde de kârlı. Umut verici ama kanıt değil: önce en az birkaç "
-                "hafta deneme hesabında (sahte parayla) izlenmeli. Gerçek para için erken.")
-        if b.usd_return_pct is not None and b.usd_return_pct < 0:
-            text += " Dikkat: dolar bazında yine de zararda."
-        return text
+        v, b, _ = max(good, key=lambda x: _own_return(x[2], x[1]))
+        return (f"\"{v.label}\" her iki dönemde de sadece dolar (USDT) tutmaktan iyi. Umut verici ama "
+                "kanıt değil: önce en az birkaç hafta deneme hesabında (sahte parayla) izlenmeli. "
+                "Gerçek para için erken.")
     if few:
         v, b = few[0]
-        return (f"\"{v.label}\" sınama döneminde kâr etti ama sadece {b.trades} işlem var; bu kadar az "
+        return (f"\"{v.label}\" sınama döneminde dolar bazında kâr etti ama sadece {b.trades} işlem var; bu kadar az "
                 "işlemle güvenilir bir sonuç çıkmaz. Hiçbir kural gerçek parayla kullanılmamalı.")
-    return ("Hiçbir kural, görmediği sınama döneminde kâr etmedi. Bu verilerde bu tür trend kurallarının "
+    return ("Hiçbir kural, görmediği sınama döneminde sadece dolar (USDT) tutmaktan daha fazla "
+            "kazandırmadı (dolar bazında kâr yok). Bu verilerde bu tür trend kurallarının "
             "işe yaradığına dair kanıt yok; gerçek parayla kullanılmamalı.")
 
 

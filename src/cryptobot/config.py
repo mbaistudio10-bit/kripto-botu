@@ -118,6 +118,10 @@ class PaperConfig(_Strict):
     max_position_pct: Decimal = Field(default=Decimal(45), gt=0, le=100)
     # How often open positions are checked against their stop and target.
     check_every_seconds: float = Field(default=2, gt=0)
+    # Idle money is kept in this currency. Money in any other currency (the
+    # TL starting capital, the proceeds of an old TRY-pair trade) is changed
+    # into it at the live rate, paying the fee once.
+    cash_currency: str = "USDT"
 
 
 def _symbols(v: object) -> list[Symbol]:
@@ -131,7 +135,7 @@ class StrategyConfig(_Strict):
     (higher-timeframe) trend is up. Decisions use closed candles only."""
 
     enabled: bool = True
-    pairs: list[Symbol] = Field(default_factory=lambda: [Symbol("BTC", "TRY"), Symbol("ETH", "TRY")])
+    pairs: list[Symbol] = Field(default_factory=lambda: [Symbol("BTC", "USDT"), Symbol("ETH", "USDT")])
     # 4-hour candles with a daily trend: the steadiest of the three rule sets
     # compared in the backtest (2026-10). 1-hour candles traded too often.
     bar_minutes: Literal[15, 30, 60, 120, 240, 1440] = 240
@@ -194,23 +198,23 @@ class BacktestConfig(_Strict):
     drawdown_pause_days: float = Field(default=7, ge=0)
     # Also test the fixed slower rule sets (backtest/variants.py) side by side.
     compare_variants: bool = True
-    # Also run every rule set on these dollar pairs: idle money then sits in
-    # USDT instead of TRY. Results are shown in TL and in USD.
-    compare_usdt: bool = True
-    usdt_pairs: list[Symbol] = Field(
-        default_factory=lambda: [Symbol("BTC", "USDT"), Symbol("ETH", "USDT")])
+    # Also run every rule set on these pairs, priced in the other currency
+    # (TL pairs when the bot trades dollar pairs), to compare where idle money
+    # does better. [] = off. Results are shown in TL and in USD.
+    compare_pairs: list[Symbol] = Field(
+        default_factory=lambda: [Symbol("BTC", "TRY"), Symbol("ETH", "TRY")])
     cache_dir: Path = Path("data/candles")
     report_file: Path = Path("data/backtest_report.txt")
 
-    @field_validator("usdt_pairs", mode="before")
+    @field_validator("compare_pairs", mode="before")
     @classmethod
-    def _parse_usdt_pairs(cls, v: object) -> list[Symbol]:
-        return _symbols(v)
+    def _parse_compare_pairs(cls, v: object) -> list[Symbol]:
+        return [] if v in (None, []) else _symbols(v)
 
     @model_validator(mode="after")
     def _check(self) -> BacktestConfig:
-        if any(p.quote != "USDT" for p in self.usdt_pairs):
-            raise ValueError("usdt_pairs must be priced in USDT, like [BTC/USDT, ETH/USDT]")
+        if len({p.quote for p in self.compare_pairs} | {"TRY", "USDT"}) > 2:
+            raise ValueError("compare_pairs must be priced in TRY or USDT, like [BTC/TRY, ETH/TRY]")
         return self
 
 
@@ -276,7 +280,16 @@ class Settings(_Strict):
         unknown = [str(p) for p in self.strategy.pairs if p not in self.pairs]
         if unknown:
             raise ValueError(f"strategy pairs must also be in pairs: {unknown}")
-        for ccy in (self.display_currency, self.risk_currency, self.starting_capital_currency):
+        if len({p.quote for p in self.backtest.compare_pairs}) > 1:
+            raise ValueError("backtest.compare_pairs must all have the same quote currency")
+        wrong_quote = [str(p) for p in self.strategy.pairs if p.quote != self.paper.cash_currency]
+        if wrong_quote:
+            raise ValueError(
+                f"strategy pairs must be priced in paper.cash_currency "
+                f"{self.paper.cash_currency}: {wrong_quote}"
+            )
+        for ccy in (self.display_currency, self.risk_currency, self.starting_capital_currency,
+                    self.paper.cash_currency):
             if ccy not in assets:
                 raise ValueError(f"currency {ccy} is not in supported_assets")
         return self

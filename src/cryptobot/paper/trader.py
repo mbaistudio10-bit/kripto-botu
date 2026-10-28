@@ -17,7 +17,8 @@ from decimal import ROUND_DOWN, Decimal
 
 from cryptobot.config import PaperConfig
 from cryptobot.domain.models import OrderBook, Symbol
-from cryptobot.events import EventLog, emit_trade_closed, emit_trade_opened
+from cryptobot.events import EventLog, Level, emit_trade_closed, emit_trade_opened
+from cryptobot.fmt import fmt_num
 from cryptobot.market_data.service import MarketDataService
 from cryptobot.paper.portfolio import PaperPortfolio
 from cryptobot.risk.engine import RiskEngine, TradeIntent
@@ -65,7 +66,10 @@ class PaperTrader:
         md: MarketDataService,
         events: EventLog,
         config: PaperConfig,
+        traded_pairs: set[Symbol] | None = None,
     ) -> None:
+        # Positions outside these pairs (left over after a settings change) are sold.
+        self._traded = traded_pairs
         self._pf = portfolio
         self._engine = engine
         self._md = md
@@ -111,6 +115,17 @@ class PaperTrader:
                 self.close(symbol, "acil kapatma", "acil durdurma (zirveden düşüş limiti)", now)
             return
         self._manage_exits(now)
+        self._convert_idle_cash()
+
+    def _convert_idle_cash(self) -> None:
+        target = self._config.cash_currency
+        for ccy, amount, got in self._pf.convert_cash(target, self._config.fee_bps):
+            self._events.emit(
+                Level.BILGI, "cash_converted",
+                f"💱 Deneme hesabı: {fmt_num(amount)} {ccy} → {fmt_num(got)} {target} "
+                f"(boştaki para {target} olarak tutulur)",
+                currency=ccy, amount=amount, target=target, received=got,
+            )
 
     def _manage_exits(self, now: datetime) -> None:
         for symbol, pos in list(self._pf.positions.items()):
@@ -118,7 +133,9 @@ class PaperTrader:
             if t is None or self._md.is_stale(symbol, now) or t.bid <= 0:
                 continue  # no reliable price: never exit on old data
             pos.mark_price = t.bid
-            if t.bid <= pos.stop_price:
+            if self._traded is not None and symbol not in self._traded:
+                self.close(symbol, "satış", "bu çift artık işlem listesinde değil (ayar değişti)", now)
+            elif t.bid <= pos.stop_price:
                 if pos.stop_price >= pos.entry_price:  # stop was raised: profit protected
                     self.close(symbol, "satış", "iz süren stop çalıştı (kâr korundu)", now)
                 else:
