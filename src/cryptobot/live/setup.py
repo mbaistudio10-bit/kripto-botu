@@ -18,6 +18,7 @@ from cryptobot.exchanges.okx_private import (
     Balance, OkxPrivateClient, ceil_to_step, floor_to_step, load_credentials,
 )
 from cryptobot.fmt import fmt_num
+from cryptobot.live.trader import MIN_SIZE_MARGIN
 
 log = logging.getLogger(__name__)
 
@@ -144,15 +145,23 @@ async def run_selftest(adapter: ExchangeAdapter, settings: Settings, value_try: 
     rate = Decimal(1)
     if symbol.quote != settings.risk_currency:
         rate = (await adapter.fetch_ticker(settings.fx.source_pair)).mid
-    qty = max(floor_to_step(value_try / rate / ticker.ask, inst.lot_size), inst.min_size)
+    # The buy fee is taken in the coin, so buy a little over the minimum or the rest could not be sold.
+    smallest = ceil_to_step(inst.min_size * MIN_SIZE_MARGIN, inst.lot_size)
+    qty = max(ceil_to_step(value_try / rate / ticker.ask, inst.lot_size), smallest)
     cost = qty * ticker.ask
     say(f"Plan: {symbol} için ≈ {fmt_num(cost)} {symbol.quote} (≈ {fmt_num(cost * rate)} TL) tutarında GERÇEK alış, "
         "ardından hemen satış. Komisyon + fark nedeniyle küçük bir kayıp (birkaç kuruş) normaldir.")
+    # Coins left over from an earlier test that were too small to sell are sold together with this one.
+    old = ctx.balances.get(symbol.base)
+    dust = old.available if old is not None and 0 < old.available < inst.min_size else Decimal(0)
+    if dust:
+        say(f"Not: hesapta önceki testten kalan {dust.normalize():f} {symbol.base} var, bu testte onunla birlikte satılacak.")
     if ask("Onaylıyorsanız EVET yazıp Enter'a basın: ").strip().upper() != "EVET":
         say("Onaylanmadı, hiçbir emir gönderilmedi.")
         return 1
     client = ctx.client
     limit = ceil_to_step(ticker.ask * (1 + settings.live.buy_slippage_bps / Decimal(10_000)), inst.tick_size)
+    buy = None
     try:
         oid = await asyncio.to_thread(client.place_order, inst.exchange_symbol, "buy", "ioc", qty, limit, "kbtestbuy")
         buy = await asyncio.to_thread(client.wait_order, inst.exchange_symbol, oid, settings.live.order_wait_seconds)
@@ -160,13 +169,17 @@ async def run_selftest(adapter: ExchangeAdapter, settings: Settings, value_try: 
         if buy.filled <= 0:
             say("Alış dolmadı; para harcanmadı.")
             return 3
-        held = buy.filled - (buy.fee if buy.fee_ccy == symbol.base else Decimal(0))
+        held = buy.filled - (buy.fee if buy.fee_ccy == symbol.base else Decimal(0)) + dust
         sell_qty = floor_to_step(held, inst.lot_size)
         oid = await asyncio.to_thread(client.place_order, inst.exchange_symbol, "sell", "market", sell_qty, None, "kbtestsell")
         sell = await asyncio.to_thread(client.wait_order, inst.exchange_symbol, oid, settings.live.order_wait_seconds)
     except ExchangeError as exc:
         say(f"TEST BAŞARISIZ: {exc}")
-        say("Borsa uygulamanızdan açık emir ve bakiye olup olmadığını kontrol edin.")
+        if buy is not None and buy.filled > 0:
+            say(f"DİKKAT: alış yapıldı ama satış yapılamadı. Hesabınızda ≈ {buy.filled.normalize():f} {symbol.base} kalmış olabilir. "
+                "OKX TR uygulamasından kontrol edin; testi tekrar çalıştırırsanız kalan miktar birlikte satılır.")
+        else:
+            say("Borsa uygulamanızdan açık emir ve bakiye olup olmadığını kontrol edin.")
         return 4
     spent = buy.filled * buy.avg_price + (buy.fee if buy.fee_ccy == symbol.quote else 0)
     got = sell.filled * sell.avg_price - (sell.fee if sell.fee_ccy == symbol.quote else 0)

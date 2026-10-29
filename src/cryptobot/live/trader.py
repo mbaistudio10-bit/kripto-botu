@@ -35,6 +35,8 @@ from cryptobot.risk.engine import RiskEngine
 log = logging.getLogger(__name__)
 
 SELL_RETRY_SECONDS = 30
+# A buy must be at least this many times the exchange minimum so the coins left after the fee can still be sold.
+MIN_SIZE_MARGIN = Decimal("1.01")
 _BPS = Decimal(10_000)
 
 
@@ -69,8 +71,12 @@ class LiveTrader(PaperTrader):
         inst = self._instruments.get(symbol)
         if inst is None:
             return [f"{symbol}: borsada bu çiftin bilgisi yok"]
-        if quantity < inst.min_size:
-            return [f"{symbol}: hesaplanan miktar borsanın en küçük emrinden ({inst.min_size.normalize():f}) küçük"]
+        # OKX takes its buy fee in the coin itself, and a sell must also reach the minimum size,
+        # so a buy right at the minimum could never be sold again. Keep a margin for the fee.
+        if quantity < inst.min_size * MIN_SIZE_MARGIN:
+            return [f"{symbol}: hesaplanan miktar ({quantity.normalize():f}), borsanın en küçük emrinin "
+                    f"({inst.min_size.normalize():f}) komisyon payıyla birlikte altında kalıyor; "
+                    "bu kadar küçük bir alış sonradan satılamaz"]
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         self._buys = [t for t in self._buys if t > cutoff]
         if len(self._buys) >= self._live.max_buys_per_day:
