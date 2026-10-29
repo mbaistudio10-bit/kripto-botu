@@ -16,6 +16,10 @@ from cryptobot.market_data.service import MarketDataService
 _LIQUIDITY_BAND_BPS = Decimal(50)
 
 
+def _acct(pf: dict) -> str:
+    return "Deneme hesabı" if pf.get("paper", True) else "GERÇEK hesap (botun payı)"
+
+
 def _num(d: Decimal | None, places: int = 2) -> str | None:
     return None if d is None else f"{d:.{places}f}"
 
@@ -121,7 +125,7 @@ def render_console(snapshot: dict[str, Any]) -> str:
     pf = snapshot.get("portfolio")
     if pf is not None:
         lines.append(
-            f"Deneme hesabı: {pf['equity_try']} TL (≈ {pf['equity_usd'] or '-'} USD) | nakit {pf['cash_try']} TL | "
+            f"{_acct(pf)}: {pf['equity_try']} TL (≈ {pf['equity_usd'] or '-'} USD) | nakit {pf['cash_try']} TL | "
             f"kapanan işlem {pf['trades_closed']}, gerçekleşen kâr {pf['realized_try']} TL"
         )
         for pos in pf["positions"]:
@@ -166,6 +170,7 @@ def render_telegram(snapshot: dict[str, Any], utc_offset_hours: int = 3) -> str:
     risk = snapshot.get("risk") or {}
     mode = snapshot["mode"]
     mode_tr = {"PAPER_TRADING": "kağıt üzerinde deneme, gerçek para yok",
+               "LIVE_TRADING": "GERÇEK PARA, borsada gerçek emirler",
                "READ_ONLY": "sadece izleme"}.get(mode, mode)
     lines = ["📊 Kripto Botu durumu", f"Mod: {mode} ({mode_tr})"]
     if risk.get("halts"):
@@ -182,7 +187,7 @@ def render_telegram(snapshot: dict[str, Any], utc_offset_hours: int = 3) -> str:
     pf = snapshot.get("portfolio")
     if pf is not None:
         lines.append(
-            f"Deneme hesabı: {_tr_num(pf['equity_try'])} TL (≈ {_tr_num(pf['equity_usd'])} USD), "
+            f"{_acct(pf)}: {_tr_num(pf['equity_try'])} TL (≈ {_tr_num(pf['equity_usd'])} USD), "
             f"başlangıç {_tr_num(pf['starting_capital'])} TL"
         )
         cash = [f"{_tr_num(v)} {'TL' if k == 'TRY' else k}" for k, v in pf["balances"].items() if v != "0"]

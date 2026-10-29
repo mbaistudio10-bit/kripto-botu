@@ -45,10 +45,21 @@ def test_roundtrip(settings: Settings) -> None:
     assert Settings.model_validate(_with(settings)) == settings
 
 
-@pytest.mark.parametrize("mode", ["LIVE_TRADING", "BACKTEST", "KILL_SWITCH"])
-def test_rejects_non_paper_modes(settings: Settings, mode: str) -> None:
-    with pytest.raises(ValidationError, match="not allowed yet"):
+@pytest.mark.parametrize("mode", ["BACKTEST", "KILL_SWITCH"])
+def test_rejects_other_modes(settings: Settings, mode: str) -> None:
+    with pytest.raises(ValidationError, match="not allowed"):
         Settings.model_validate(_with(settings, trading_mode=mode))
+
+
+def test_live_mode_loads_but_is_not_confirmed_by_default(settings: Settings) -> None:
+    live = Settings.model_validate(_with(settings, trading_mode="LIVE_TRADING"))
+    assert live.live.confirmed is False
+    assert live.live.max_capital_try == 400
+
+
+def test_live_mode_is_spot_only_and_needs_strategy(settings: Settings) -> None:
+    with pytest.raises(ValidationError, match="strategy.enabled"):
+        Settings.model_validate(_with(settings, trading_mode="LIVE_TRADING", strategy={"enabled": False}))
 
 
 def test_spot_requires_1x(settings: Settings) -> None:

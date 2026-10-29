@@ -1,0 +1,20 @@
+# =====================================================================
+# CANLI MOD (GERÇEK PARA) - sadece "--live" ile başlatılınca settings.yaml'ın üstüne biner.
+# Normal başlatma (KriptoBotu.exe) bu dosyayı KULLANMAZ, deneme parasıyla çalışmaya devam eder.
+# Başlatmak için: CanliBaslat.bat    Küçük gerçek test için: CanliTest.bat
+# =====================================================================
+trading_mode: LIVE_TRADING
+
+exchange:
+  # OKX TR adresi. API anahtarı sadece oluşturulduğu sitede çalışır.
+  rest_base_url: https://tr.okx.com
+
+market_data:
+  # Canlıda fiyatlar OKX TR'den düzenli sorulur (canlı akım adresi doğrulanana kadar).
+  mode: rest
+
+live:
+  # Gerçek parayla işlem yapmak istediğinizden EMİN olduğunuzda bunu kendiniz true yapın.
+  confirmed: false
+  # Botun kullanabileceği EN FAZLA para (TL). Hesabınızda daha fazla olsa da bot buna dokunmaz.
+  max_capital_try: 400

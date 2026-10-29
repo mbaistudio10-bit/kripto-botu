@@ -81,7 +81,8 @@ def build_summary(
         lines.append("Durum: ✅ normal")
     if health:
         lines.append(f"Sistem sağlığı: {fmt_num(_d(health.get('score')), 1)} / 10 · {health.get('summary', '')}")
-    lines.append("Deneme parasıdır, yatırım tavsiyesi değildir.")
+    lines.append("Deneme parasıdır, yatırım tavsiyesi değildir." if pf.get("paper", True)
+                 else "Gerçek para hesabıdır. Yatırım tavsiyesi değildir.")
 
     return {
         "date": day.isoformat(),

@@ -99,7 +99,7 @@ def _protection(settings: Settings) -> Part:
         score -= 3
         notes.append("kaldıraç/vadeli açık")
     if not notes:
-        notes.append("Tüm zarar sınırları ve ana para koruması açık; spot, kaldıraçsız, deneme parası.")
+        notes.append("Tüm zarar sınırları ve ana para koruması açık; spot, kaldıraçsız.")
     return Part("protection", "Risk korumaları", max(score, 0), "; ".join(notes))
 
 
