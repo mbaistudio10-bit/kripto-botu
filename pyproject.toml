@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cryptobot"
-version = "0.7.2"
+version = "0.7.3"
 description = "Multi-currency crypto trading bot (Phase 4: trend strategy + backtest, paper trading)"
 requires-python = ">=3.11"
 dependencies = [

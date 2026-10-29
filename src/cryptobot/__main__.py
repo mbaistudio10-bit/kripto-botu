@@ -20,7 +20,7 @@ import aiohttp
 
 from cryptobot.api.jarvis import JarvisApi, JarvisWebhook, start_api
 from cryptobot.api.panel import PanelApi, backtest_summary, build_overview, panel_links, start_panel
-from cryptobot.autostart import autostart_command
+from cryptobot.autostart import autostart_command, hide_console
 from cryptobot.backtest.run import run_backtest, send_to_telegram
 from cryptobot.config import Settings, load_settings
 from cryptobot.daily import DailySummaryTask, SummaryStore
@@ -381,6 +381,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.autostart:
         return autostart_command(args.autostart)
+    if args.background:
+        hide_console()
 
     try:
         settings = load_settings(args.config)

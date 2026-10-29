@@ -22,6 +22,10 @@ Kodlama bilgisi gerekmez. Python kurmanıza da gerek yok.
 
 `KriptoBotu` klasöründeki **KriptoBotu** dosyasına çift tıklayın.
 - "Windows kişisel bilgisayarınızı korudu" çıkarsa: **"Ek bilgi" → "Yine de çalıştır"**.
+- Klasördeki **`_internal`** klasörü programın parçasıdır; silmeyin, taşımayın.
+- **Windows Güvenliği "virüs/tehdit bulundu" derse:** Program imzasız olduğu için Windows bazen yanlış alarm verir
+  (kodun tamamı GitHub'daki projenizde, gerçek emir göndermez). Başlat → **Windows Güvenliği** → **Virüs ve tehdit
+  koruması** → **Koruma geçmişi** → KriptoBotu satırı → **Eylemler** → **Cihazda izin ver** (veya **Geri yükle**).
 
 Siyah pencerede önce çiftler kontrol edilir, sonra her 5 saniyede bir fiyat ve risk tablosu çıkar.
 **Durdurmak için:** pencere seçiliyken **Ctrl + C**.

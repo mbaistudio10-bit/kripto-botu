@@ -133,17 +133,24 @@ async def test_jarvis_gets_only_the_summary_and_can_fetch_it_later(tmp_path: Pat
 
 # ----------------------------------------------------------------- running in the background
 
-def test_autostart_script_handles_turkish_folder_names(tmp_path: Path) -> None:
-    from cryptobot.autostart import set_autostart
+def test_autostart_uses_the_normal_startup_list_and_removes_the_old_script(tmp_path: Path) -> None:
+    from cryptobot.autostart import OLD_SCRIPT_NAME, VALUE_NAME, set_autostart
 
-    exe = Path("C:/Users/Ayşe/Masaüstü/KriptoBotu/KriptoBotu.exe")
-    script = set_autostart(True, exe, tmp_path)
-    raw = script.read_bytes()
-    assert raw.startswith(b"\xff\xfe")  # UTF-16 with BOM
-    text = raw.decode("utf-16")
-    assert "Masaüstü" in text and "--background" in text and ", 0, False" in text
-    set_autostart(False, exe, tmp_path)
-    assert not script.exists()
+    class FakeRunKey(dict):
+        def set(self, name: str, command: str) -> None:
+            self[name] = command
+
+        def delete(self, name: str) -> None:
+            self.pop(name, None)
+
+    old = tmp_path / OLD_SCRIPT_NAME  # antivirus programs dislike this, so it goes
+    old.write_text("x", encoding="utf-8")
+    run = FakeRunKey()
+    exe = Path("C:/Users/Ayşe/Masaüstü/Kripto Botu/KriptoBotu.exe")
+    set_autostart(True, exe, run, tmp_path)
+    assert run[VALUE_NAME] == f'"{exe}" --background' and not old.exists()
+    set_autostart(False, exe, run, tmp_path)
+    assert VALUE_NAME not in run
 
 
 def test_only_one_copy_runs(settings) -> None:
