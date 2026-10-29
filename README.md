@@ -45,8 +45,21 @@ pip install -r requirements.txt
 PYTHONPATH=src python -m cryptobot          # live table every 5s
 PYTHONPATH=src python -m cryptobot --once   # one snapshot, exit code 0 if all pairs priced
 PYTHONPATH=src python -m cryptobot --backtest --days 730   # report -> data/backtest_report.txt (+ Telegram)
+PYTHONPATH=src python -m cryptobot --background  # no console table, no browser; restarts itself 60s after a crash
+KriptoBotu.exe --autostart on|off               # Windows: start hidden at logon (Startup folder) and run now / remove
 python -m pytest -q
 ```
+The bot holds a single-instance lock (TCP port `panel.port - 1` on 127.0.0.1) and, with `keep_awake: true`,
+keeps Windows from sleeping while it runs. `packaging/ArkaPlanda-Calistir.bat` / `ArkaPlan-Durdur.bat` wrap
+`--autostart on/off` for the owner.
+
+## Capital guard
+`capital_guard` keeps equity above a floor: `base × (1 − max_loss_from_start_pct) + lock_profit_pct × max(0, peak − base)`
+(defaults 2% and 50%). New positions are sized so that all open stops together cannot take equity below the floor
+(budget split over the free position slots). Touching the floor raises a CLOSE_ALL `floor` halt; `/devam ONAY`
+lifts it and rebuilds the base from current equity. The backtester applies the same rule. Fees and gaps can still
+push equity slightly below the floor; this limits losses, it cannot rule them out.
+Entries also need order-book imbalance within the depth band ≥ `liquidity.min_book_imbalance` (default −0.3).
 
 ## Strategy and backtest
 - Entry (`strategy` in settings.yaml): on a closed 1h bar, LONG if the last *finished* 4h bar closes above
@@ -77,6 +90,7 @@ python -m pytest -q
 | NO_NEW_POSITIONS | `/durdur` or Jarvis stop | `/devam` (Jarvis may only lift its own stop) |
 | NO_NEW_POSITIONS | pair delisted with an open position | owner `/devam` |
 | CLOSE_ALL | total drawdown limit | owner `/devam ONAY` (peak reset) |
+| CLOSE_ALL | capital floor reached | owner `/devam ONAY` (guard base reset) |
 
 Looser risk limits in settings.yaml wait for `/onayla`; tighter ones apply immediately. Changes are logged.
 
@@ -89,13 +103,19 @@ Send `Authorization: Bearer <key>`.
 | GET | `/api/v1/health`, `/api/v1/status`, `/api/v1/limits` | read or control |
 | GET | `/api/v1/events?since=<ISO-8601>&limit=100` | read or control |
 | GET | `/api/v1/report?period=gün\|hafta\|ay` (categories: Kazanç, Kripto birimleri, Al-sat işlemleri + Turkish `text`) | read or control |
+| GET | `/api/v1/daily-summary?date=YYYY-MM-DD` (default: latest; 404 if none) | read or control |
 | GET | `/api/v1/overview`: status + `health` score + `reports` (gün/hafta/ay) + `limits_text` + last 50 `events` + `backtest` summary | read or control |
 | POST | `/api/v1/control/stop` body `{"reason": "..."}` | control |
 | POST | `/api/v1/control/resume` | control |
 
 There is no endpoint to place orders, change limits or lift loss/drawdown halts.
-If `JARVIS_WEBHOOK_URL` is set, every notified event is POSTed as JSON with header
-`X-KriptoBotu-Signature: hex(HMAC-SHA256(JARVIS_READ_KEY, body))`.
+If `JARVIS_WEBHOOK_URL` is set, events are POSTed as JSON with header
+`X-KriptoBotu-Signature: hex(HMAC-SHA256(JARVIS_READ_KEY, body))`. With `jarvis.webhook_events: summary`
+(default) only the `daily_summary` event is sent, retried with backoff for about 24 h; `all` sends every notified event.
+
+The daily summary (`daily_summary.at`, default 23:55 local) goes to Telegram, the webhook and
+`data/daily_summaries.jsonl`; a summary missed while the bot was off is written at the next start.
+The bot never depends on Jarvis being up.
 
 ```
 curl -H "Authorization: Bearer $JARVIS_READ_KEY" "http://127.0.0.1:8765/api/v1/report?period=gün"
@@ -114,5 +134,8 @@ The page is self-contained HTML/JS (no external scripts), with a web manifest an
 2. Risk engine, kill switch, Telegram alerts/commands, Jarvis link (done)
 3. Paper trading + PnL in TRY and USD (done)
 4. Simple trend strategy + backtest (done)
-5. Control Center (this): one-screen web app for PC and phone (installable), health score, Jarvis overview
+5. Control Center: one-screen web app for PC, phone and tablet (installable), health score, Jarvis overview (done)
+6. Capital guard, order-book entry filter, daily summary for Jarvis, background running (this)
+7. Later, only after weeks of paper results: news/on-chain filters; small live spot with owner approval.
+   Futures and leverage are left out on purpose (lowest risk).
 

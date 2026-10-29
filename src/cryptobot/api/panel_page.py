@@ -150,6 +150,7 @@ code{font:13px ui-monospace,Consolas,monospace;background:var(--line);padding:1p
     <div class="card"><h2>Kazanç raporu</h2>
       <div class="seg" id="seg"><button data-p="gün" class="on">Bugün</button><button data-p="hafta">Bu hafta</button><button data-p="ay">Bu ay</button></div>
       <div id="report"></div></div>
+    <div class="card"><h2>Son gün sonu özeti</h2><pre id="daily" class="sub"></pre></div>
     <div class="card"><h2>Son olaylar (alış, satış, uyarı)</h2><div id="events"></div></div>
   </section>
 
@@ -221,6 +222,7 @@ if(pf){$("equity").textContent=tl(pf.equity_try);$("equityusd").textContent="≈
 const a=clear($("acct"));row(a,"Başlangıca göre",signed(pf.total_change_try,"TL"),cls(pf.total_change_try));
 row(a,"Kapanan işlemlerden kâr",signed(pf.realized_try,"TL")+" ("+signed(pf.realized_usd,"USD")+")",cls(pf.realized_try));
 row(a,"Kapanan işlem",String(pf.trades_closed));row(a,"Ödenen komisyon",tl(pf.fees_try));
+const g=risk.capital_guard;if(g)row(a,"Ana para tabanı",tl(g.floor)+" (tabana "+tl(g.headroom)+" var)");
 for(const[k,v]of Object.entries(pf.balances||{}))if(Number(v))row(a,"Boştaki para ("+(k==="TRY"?"TL":k)+")",num(v));
 const ps=clear($("positions"));if(!pf.positions.length)ps.append(el("p","sub","Açık pozisyon yok. Strateji net bir yükseliş bekliyor; günlerce alış olmaması normaldir."));
 for(const x of pf.positions){const c=el("div");c.style.marginTop="6px";c.append(el("b",null,x.pair));ps.append(c);
@@ -245,10 +247,12 @@ const ev=clear($("events"));if(!(s.events||[]).length)ev.append(el("p","sub","He
 for(const e of s.events||[]){const d=el("div","ev");d.append(el("time",null,when(e.time)+" · "+e.level));d.append(document.createTextNode(e.message));ev.append(d)}
 // limits
 const L=clear($("limits")),lim=risk.limits||{};
-for(const[name,used,max]of[["Bugünkü zarar",risk.daily_loss_pct,lim.max_daily_loss_pct],["Bu haftaki zarar",risk.weekly_loss_pct,lim.max_weekly_loss_pct],["Zirveden düşüş",risk.drawdown_pct,lim.max_total_drawdown_pct]]){
+const guardRows=risk.capital_guard?[["Ana para tabanına kalan paydan kullanılan",risk.capital_guard.used_pct,100]]:[];
+for(const[name,used,max]of[...guardRows,["Bugünkü zarar",risk.daily_loss_pct,lim.max_daily_loss_pct],["Bu haftaki zarar",risk.weekly_loss_pct,lim.max_weekly_loss_pct],["Zirveden düşüş",risk.drawdown_pct,lim.max_total_drawdown_pct]]){
 const u=Math.max(0,Number(used||0)),m=Number(max||1),share=Math.min(100,u/m*100);const d=el("div");d.style.padding="6px 0";
 const top=el("div","row");top.style.border="0";top.style.padding="0";top.append(el("span",null,name));top.append(el("span",null,"%"+num(u)+" / %"+num(m)));d.append(top);
 const bar=el("div","bar");const i=el("i");i.style.width=share+"%";i.style.background=share<50?"var(--good)":share<70?"var(--warn)":"var(--bad)";bar.append(i);d.append(bar);L.append(d)}
+if(risk.capital_guard)row(L,"Ana para tabanı",tl(risk.capital_guard.floor)+" (başlangıcın %"+num(risk.capital_guard.max_loss_from_start_pct,0)+" altı, kârın %"+num(risk.capital_guard.lock_profit_pct,0)+"'si kilitli)");
 row(L,"İşlem başına en fazla risk","%"+num(lim.max_risk_per_trade_pct));row(L,"Aynı anda en fazla pozisyon",(risk.open_positions??"–")+" / "+(lim.max_concurrent_positions||"–"));
 const H=clear($("halts"));if(!(risk.halts||[]).length)H.append(el("p","pos","Durdurma yok, bot normal çalışıyor."));
 for(const x of risk.halts||[])H.append(el("p","neg",x.message));
@@ -259,6 +263,7 @@ for(const[pair,x]of Object.entries(st.pairs||{})){const d=el("div","ev");d.appen
 d.append(document.createTextNode(x.why||(x.ready?"Karar bekleniyor.":"Geçmiş mumlar yükleniyor…")));S.append(d)}}
 const T=clear($("tradable"));for(const x of s.pairs||[]){if(x.tradable===undefined)continue;
 row(T,x.pair,x.tradable?"uygun":(x.problems||[]).join("; "),x.tradable?"pos":"neg")}
+$("daily").textContent=s.daily_summary?s.daily_summary.text:"Henüz gün sonu özeti yok. Her akşam 23:55'te yazılır.";
 $("backtest").textContent=s.backtest||"Henüz test yapılmadı. GeriyeTest.bat ile çalıştırın.";
 // jarvis
 const J=clear($("jarvis"));const j=s.jarvis||{};row(J,"Durum",j.enabled?(j.running?"açık":"açılamadı"):"kapalı",j.running?"pos":"neg");
@@ -282,16 +287,18 @@ $("save").onclick=()=>{KEY=$("key").value.trim();try{localStorage.setItem("kb_ke
 
 const G=[
 ["Bu sistem ne yapar?","Kripto Botu, OKX borsasındaki BTC ve ETH fiyatlarını canlı izler, bir trend kuralına göre deneme parasıyla (sahte para) alım-satım yapar ve her şeyi size bildirir. Gerçek emir gönderilmez."],
-["Nereden takip edilir?",["Bu ekran (Kontrol Merkezi): bilgisayarda ve telefonda, uygulama gibi.","Telegram (Achilles): her alış, satış, stop ve hata anında mesaj gelir.","Jarvis: kısa özet ve acil durdurma.","Bilgisayardaki siyah pencere: canlı tablo."]],
-["Nasıl alım yapar?",["4 saatlik mum kapanınca bakar (Türkiye saatiyle 03, 07, 11, 15, 19, 23).","Günlük trend yukarı, fiyat ortalamanın üstünde ve son 20 mumun en yükseğini geçmiş olmalı.","Sonra risk motoru son kararı verir. Günlerce alış olmaması normaldir."]],
+["Nereden takip edilir?",["Bu ekran (Kontrol Merkezi): bilgisayar, telefon ve tablette, uygulama gibi.","Telegram (Achilles): her alış, satış, stop ve hata anında mesaj; her akşam gün sonu özeti.","Jarvis: her akşam gün sonu özetini alır ve size anlatır.","Bot arka planda kendi başına çalışır; Jarvis, telefon veya bu ekran kapalı olsa da durmaz."]],
+["Nasıl alım yapar?",["4 saatlik mum kapanınca bakar (Türkiye saatiyle 03, 07, 11, 15, 19, 23).","Günlük trend yukarı, fiyat ortalamanın üstünde ve son 20 mumun en yükseğini geçmiş olmalı.","Emir defterinde satıcılar baskınsa almaz.","Sonra risk motoru son kararı verir. Günlerce alış olmaması normaldir."]],
 ["Nasıl satar?",["Zarar-kes (stop): alıştan sonra fiyat belirli bir seviyeye inerse.","Başa-baş ve iz süren stop: fiyat yükseldikçe stop yukarı gelir, kâr korunur.","3 günde kâra geçmezse veya 15 gün dolunca satar; günlük trend bozulursa satar."]],
 ["Para neden dolarda duruyor?","Geçmiş veri testinde TL dolara karşı değer kaybettiği için boştaki parayı dolarda (USDT) tutmak daha iyi çıktı. Bakiye yine TL ve USD olarak gösterilir; asıl başarı ölçüsü USD sonucudur."],
-["Koruma kuralları",["Günlük zarar %3 → gece yarısına kadar yeni işlem yok.","Haftalık zarar %6 → pazartesiye kadar yeni işlem yok.","Zirveden %10 düşüş → bot tüm pozisyonları kapatır ve durur; sadece siz 'ONAY' ile açabilirsiniz.","İşlem başına en fazla %1 risk, aynı anda en fazla 2 pozisyon.","Sadece spot, kaldıraç yok. Dolar kuru 5 dakikadan eskiyse yeni işlem açılmaz."]],
+["Ana para koruması",["Bot, başlangıç parasının hemen altında bir taban korur (başlangıç %2 eksi; komisyon yüzünden tam sıfır mümkün değil).","İşlem büyüklükleri, açık işlemlerin hepsi zarar-kese takılsa bile bakiye tabanın üstünde kalacak şekilde küçültülür.","Kâr geldikçe taban yükselir: en iyi kârın yarısı kilitlenir.","Bakiye yine de tabana inerse (ani fiyat boşluğu gibi) bot her şeyi satar ve durur; sadece siz 'ONAY' ile açabilirsiniz.","Hiçbir sistem zararı tamamen imkânsız yapamaz; bu koruma zararı küçük ve sınırlı tutar."]],
+["Diğer koruma kuralları",["Günlük zarar %3 → gece yarısına kadar yeni işlem yok.","Haftalık zarar %6 → pazartesiye kadar yeni işlem yok.","Zirveden %10 düşüş → bot tüm pozisyonları kapatır ve durur; sadece siz 'ONAY' ile açabilirsiniz.","İşlem başına en fazla %1 risk, aynı anda en fazla 2 pozisyon.","Sadece spot, kaldıraç yok. Dolar kuru 5 dakikadan eskiyse yeni işlem açılmaz."]],
 ["Düğmeler",["Acil durdur: yeni işlem açılmaz; bot izlemeye ve açık pozisyonları korumaya devam eder.","Devam ettir: sizin veya Jarvis'in durdurmasını kaldırır. Günlük/haftalık zarar durdurması kendiliğinden kalkar."]],
 ["Telegram komutları",["/durum – anlık durum","/limitler – zarar sınırları","/rapor (hafta, ay) – kazanç özeti","/durdur ve /devam – acil durdurma","/panel – bu ekranın bağlantısı"]],
-["Jarvis neler yapabilir?",["Okur: durum, limitler, olaylar, kazanç raporu, sağlık puanı (tek istekte: /api/v1/overview).","Acil durdurabilir ve kendi durdurmasını kaldırabilir.","Emir veremez, limit değiştiremez, sizin durdurmanızı kaldıramaz. Her Jarvis komutu Telegram'a bildirilir."]],
+["Jarvis neler yapabilir?",["Her akşam 23:55'te gün sonu özetini alır (kapalıysa açılınca gelir; /api/v1/daily-summary ile de okur).","Okur: durum, limitler, olaylar, kazanç raporu, sağlık puanı (tek istekte: /api/v1/overview).","Acil durdurabilir ve kendi durdurmasını kaldırabilir.","Emir veremez, limit değiştiremez, sizin durdurmanızı kaldıramaz. Her Jarvis komutu Telegram'a bildirilir."]],
 ["Sağlık puanı ne demek?","Her parça (korumalar, zarar sınırlarına uzaklık, fiyat verisi, dolar kuru, strateji verisi, bildirimler, Jarvis) 10 üzerinden puanlanır. Hedef 8 ve üstü. Bu puan sistemin güvenli ve eksiksiz çalıştığını gösterir; kâr garantisi değildir."],
-["Yol haritası",["1–3: altyapı, risk motoru, Telegram, deneme hesabı (bitti)","4: trend stratejisi ve geçmiş veri testi (bitti)","5: Kontrol Merkezi ve Jarvis (bu ekran)","6: emir defterine bakarak daha akıllı giriş","7: haber ve blokzincir verisi","8: vadeli işlemler","9: gerçek parayla işlem (önce küçük tutarla, deneme hesabı haftalarca iyi giderse)"]],
+["Arka planda çalışma",["ArkaPlanda-Calistir.bat: bot penceresiz çalışır ve Windows her açıldığında kendiliğinden başlar.","Çökerse veya internet giderse 1 dakika sonra kendini yeniden başlatır.","Bot çalışırken bilgisayar uykuya geçmez (ekran kapanabilir). Bilgisayar kapalıysa bot da çalışmaz.","Durdurmak için: ArkaPlan-Durdur.bat"]],
+["Yol haritası",["Bitti: altyapı, risk motoru, Telegram, deneme hesabı, trend stratejisi, geçmiş veri testi, Kontrol Merkezi, ana para koruması, emir defteri kontrolü, gün sonu özeti, arka planda çalışma.","Sonra: haber ve blokzincir verisi.","Bilerek yapılmayanlar: vadeli işlem ve kaldıraç (riski çok artırır).","Gerçek para: sadece deneme hesabı haftalarca dolar bazında kâr ederse, küçük tutarla ve sizin onayınızla."]],
 ["Önemli","Geçmiş veri testleri ve deneme sonuçları gelecekteki kazancı garanti etmez. Bu bir yatırım tavsiyesi değildir."]];
 (function(){const g=$("guide");for(const[t,b]of G){g.append(el("h3",null,t));if(Array.isArray(b)){const u=el("ul");for(const x of b)u.append(el("li",null,x));g.append(u)}else g.append(el("p",null,b))}})();
 

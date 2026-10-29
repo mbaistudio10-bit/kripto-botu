@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import time as dt_time
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
@@ -85,6 +86,19 @@ class LiquidityConfig(_Strict):
     depth_band_bps: Decimal = Field(default=Decimal(50), gt=0)
     # A pair must stay unfit this long before a Telegram warning is sent.
     alert_after_seconds: float = Field(default=120, ge=0)
+    # No buy while sellers clearly outweigh buyers near the price:
+    # (bid depth - ask depth) / total, from -1 (only sellers) to +1 (only buyers).
+    min_book_imbalance: Decimal = Field(default=Decimal("-0.3"), ge=-1, le=1)
+
+
+class CapitalGuardConfig(_Strict):
+    """Keeps the account above a floor near the money put in, and locks in part of every gain."""
+
+    enabled: bool = True
+    # The floor starts this far below the starting capital (fees make 0 impossible).
+    max_loss_from_start_pct: Decimal = Field(default=Decimal(2), gt=0, le=10)
+    # The floor rises by this share of the best profit so far (50 = keep half).
+    lock_profit_pct: Decimal = Field(default=Decimal(50), ge=0, le=90)
 
 
 class TelegramConfig(_Strict):
@@ -106,6 +120,17 @@ class JarvisConfig(_Strict):
     # 127.0.0.1 = only programs on this computer can connect.
     host: str = "127.0.0.1"
     port: int = Field(default=8765, ge=1024, le=65535)
+    # What is pushed to JARVIS_WEBHOOK_URL: "summary" = only the end-of-day summary,
+    # "all" = every alert and trade as well.
+    webhook_events: Literal["summary", "all"] = "summary"
+
+
+class DailySummaryConfig(_Strict):
+    """One end-of-day summary for Telegram and Jarvis."""
+
+    enabled: bool = True
+    at: dt_time = dt_time(23, 55)  # local time (risk.reset_utc_offset_hours)
+    file: Path = Path("data/daily_summaries.jsonl")
 
 
 class PanelConfig(_Strict):
@@ -253,6 +278,7 @@ class Settings(_Strict):
     starting_capital: Decimal = Field(gt=0)
     starting_capital_currency: str
     risk: RiskLimits
+    capital_guard: CapitalGuardConfig = CapitalGuardConfig()
     exchange: ExchangeConfig
     market_data: MarketDataConfig
     fx: FxConfig
@@ -267,6 +293,9 @@ class Settings(_Strict):
     telegram: TelegramConfig = TelegramConfig()
     jarvis: JarvisConfig = JarvisConfig()
     panel: PanelConfig = PanelConfig()
+    daily_summary: DailySummaryConfig = DailySummaryConfig()
+    # Windows: keep the computer from sleeping while the bot runs (the screen may turn off).
+    keep_awake: bool = True
 
     @field_validator("pairs", mode="before")
     @classmethod

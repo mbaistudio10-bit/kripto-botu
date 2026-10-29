@@ -1,4 +1,4 @@
-# Kripto Botu: Kurulum ve Kullanım Rehberi (Faz 4)
+# Kripto Botu: Kurulum ve Kullanım Rehberi
 
 > **Önemli:** Bu yazılım yatırım tavsiyesi değildir. Geçmiş performans gelecekteki getiriyi garanti etmez.
 > Bot şu an **gerçek emir göndermez**. Bir trend stratejisiyle sahte parayla (10.000 TL) deneme işlemleri yapar, riskleri izler ve size Telegram'dan (Achilles) haber verir.
@@ -25,6 +25,25 @@ Kodlama bilgisi gerekmez. Python kurmanıza da gerek yok.
 
 Siyah pencerede önce çiftler kontrol edilir, sonra her 5 saniyede bir fiyat ve risk tablosu çıkar.
 **Durdurmak için:** pencere seçiliyken **Ctrl + C**.
+
+### 2a. Sürekli arka planda çalıştırma (önerilen)
+
+Botun pencere açık durmadan, bilgisayar her açıldığında kendiliğinden çalışması için:
+1. `KriptoBotu` klasöründeki **ArkaPlanda-Calistir** dosyasına çift tıklayın.
+2. "Tamam" yazısını görünce pencereyi kapatın. Bot hemen arka planda başlar.
+
+Bundan sonra:
+- Bilgisayar her açıldığında bot **kendiliğinden ve görünmeden** başlar.
+- Bot çalışırken bilgisayar **uyku moduna geçmez** (ekran kapanabilir, sorun değil).
+- Bot bir hatayla kapanırsa **1 dakika sonra kendini yeniden başlatır**.
+- Bot iki kez açılmaz; zaten çalışıyorsa ikinci açılış kendiliğinden kapanır.
+- Bot **Jarvis'ten bağımsızdır**: Jarvis kapalı olsa da çalışmaya devam eder.
+- Botu görmek için Kontrol Merkezi'ni açın (bölüm 8) veya Telegram'dan `/durum` yazın.
+
+**Kapatmak için:** **ArkaPlan-Durdur** dosyasına çift tıklayın. Bot durur ve açılışta artık başlamaz.
+
+Not: Bilgisayar tamamen kapalıyken bot da çalışmaz. Bilgisayarı kapatmak yerine açık bırakın veya
+uyku yerine "ekranı kapat" ayarını kullanın.
 
 İlk çalıştırmada klasörde **`.env`** adlı bir dosya oluşur. Bu sizin gizli ayar dosyanızdır.
 
@@ -82,11 +101,27 @@ Bot sadece **sizin** Telegram hesabınızdan gelen komutlara cevap verir. Başka
 |---|---|
 | Günlük zarar %3 | O gün yeni işlem açılmaz. Gece 00:00'da (TR) kendiliğinden açılır. Elle kaldırılamaz. |
 | Haftalık zarar %6 | Pazartesiye kadar yeni işlem açılmaz. Elle kaldırılamaz. |
+| **Ana para koruması** | Aşağıda ayrıca anlatıldı. |
 | Zirveden düşüş %10 | **Acil durdurma**: yeni işlem yok, açık pozisyonlar kapatılır. Kaldırmak için `/devam ONAY`. |
 | İşlem başına risk %1 | Stop fiyatına kadar olası zarar bakiyenin %1'ini geçemez. |
 | En fazla 2 pozisyon | Aynı anda en fazla 2 açık işlem. |
 | Kur 5 dakikadan eski | Yeni işlem açılmaz. |
 | Likidite yetersiz | Alış-satış farkı geniş, hacim düşük veya emir defteri sığ olan çiftte işlem açılmaz. |
+| Satıcılar baskın | Emir defterinde satış tarafı alış tarafından çok ağırsa alış yapılmaz. |
+
+### Ana para koruması (en önemli kural)
+
+Bot, yatırdığınız parayı korumak için bir **taban** tutar:
+- Başlangıçta taban, başlangıç parasının **%2 altıdır** (10.000 TL ile başlarsanız 9.800 TL).
+- Bot kâr ettikçe taban yükselir: kazancın **yarısı kilitlenir**. Örneğin bakiye 11.000 TL'ye çıkarsa taban 10.300 TL olur,
+  yani artık zarar etse bile başlangıç parasının **üstünde** kalmaya çalışır.
+- Bot her alışta miktarı öyle seçer ki, açık işlemlerin hepsi aynı anda zarar-kese (stop) gelse bile bakiye tabanın üstünde kalsın.
+  Tabana yaklaştıkça alışlar küçülür.
+- Bakiye tabana değerse bot **her şeyi satar ve durur**. Tekrar başlatmak için `/devam ONAY` yazmanız gerekir;
+  o zaman taban yeni bakiyeye göre yeniden hesaplanır.
+
+**Dürüst not:** Hiçbir sistem "asla zarar etmez" diyemez. Komisyon ve ani fiyat sıçramaları (fiyatın stop'un altından açılması)
+yüzünden bakiye tabanın biraz altına inebilir. Bu kural zararı **en aza indirir**, sıfırlamaz.
 
 Bot kapatılıp açılsa bile durdurmalar hatırlanır (`data/risk_state.json`).
 
@@ -108,6 +143,16 @@ Bu anahtarları sadece Jarvis'e verin. Jarvis'in yapabildikleri:
 
 Jarvis'in **yapamadıkları:** emir göndermek, limit değiştirmek, sizin yaptığınız durdurmayı veya zarar limiti/acil durdurmayı kaldırmak.
 Jarvis botu her durdurduğunda size Telegram'dan haber gelir.
+
+**Gün sonu özeti:** Bot her akşam **23:55'te** (TR saati) günün kısa bir özetini yazar: kazanç, işlemler, coinler,
+bakiye, açık pozisyonlar, ana para tabanı ve sağlık puanı. Bu özet:
+- Telegram'dan (Achilles) size gelir,
+- Jarvis'e gönderilir (Jarvis kapalıysa, açılana kadar yaklaşık 24 saat boyunca tekrar denenir),
+- Kontrol Merkezi'nde **İşlemler** sekmesinde görünür,
+- Jarvis istediği zaman da okuyabilir.
+
+Jarvis'e varsayılan olarak **sadece bu gün sonu özeti** gönderilir (alış-satış mesajları size Telegram'dan zaten gelir).
+Bot o saatte kapalıysa, eksik özet bir sonraki açılışta yazılır.
 
 Teknik ayrıntılar (Jarvis'i kuran kişi için): `README.md` → "Jarvis API".
 
@@ -194,7 +239,7 @@ Tüm ayrıntılar `data/backtest_report.txt` dosyasındadır.
 
 ---
 
-## 8. Kontrol Merkezi: bilgisayar ve telefon (Faz 5)
+## 8. Kontrol Merkezi: bilgisayar, telefon ve tablet (Faz 5)
 
 Botun her şeyi tek ekranda: bakiye (TL ve USD), açık pozisyonlar, kazanç raporu (gün/hafta/ay),
 son olaylar, zarar sınırları, strateji kararları, son test raporu, **sistem sağlık puanı**, Jarvis bağlantısı
@@ -207,8 +252,8 @@ ve her şeyin anlatıldığı bir **Rehber**. **Acil durdur** ve **Devam ettir**
 3. Uygulama gibi kullanmak için: Edge'de sağ üstteki **⋯ → Uygulamalar → Bu siteyi uygulama olarak yükle**
    (Chrome'da: adres çubuğundaki **yükle** simgesi). Masaüstünde ve başlat menüsünde "Kripto Botu" simgesi olur.
 
-**Telefonda:**
-1. Telefon, bilgisayarla **aynı ev Wi-Fi'ına** bağlı olsun.
+**Telefonda veya tablette (iPhone, iPad, Android):**
+1. Telefon/tablet, bilgisayarla **aynı ev Wi-Fi'ına** bağlı olsun.
 2. Telegram'da Achilles'e `/panel` yazın; gelen "Telefonda" bağlantısına dokunun.
 3. Ana ekrana ekleyin: **iPhone (Safari):** paylaş düğmesi → **Ana Ekrana Ekle**.
    **Android (Chrome):** ⋮ menüsü → **Ana ekrana ekle**.
@@ -236,3 +281,4 @@ Kontrol Merkezi emir veremez ve limit değiştiremez. Anahtarı değiştirmek i�
 - `data/paper_state.json`: deneme hesabının bakiyesi ve açık pozisyonları
 - `data/candles/`: indirilen geçmiş fiyatlar (silerseniz yeniden indirilir)
 - `data/backtest_report.txt`: son geçmiş veri testinin raporu
+- `data/daily_summaries.jsonl`: her günün gün sonu özeti

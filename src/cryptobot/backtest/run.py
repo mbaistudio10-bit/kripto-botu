@@ -92,7 +92,8 @@ async def run_backtest(settings: Settings, adapter: ExchangeAdapter, days: int |
             data = {s: c if v.strategy.bar_minutes == base else resample(c, base, v.strategy.bar_minutes)[0]
                     for s, c in pairs.items()}
             bt = Backtester(strat, v.exits, settings.risk, settings.paper, cfg.slippage_bps,
-                            float(settings.starting_capital), cfg.drawdown_pause_days, quote)
+                            float(settings.starting_capital), cfg.drawdown_pause_days, quote,
+                            settings.capital_guard)
             is_ = bt.run(data, start, split, f"Öğrenme dönemi (ilk %{pct:g})", fx)
             oos = bt.run(data, split, end, f"Sınama dönemi (son %{100 - pct:g}, kural bu dönemi hiç görmedi)", fx)
             results.append((dataclasses.replace(v, label=v.label + suffix) if suffix else v, is_, oos))
@@ -109,6 +110,10 @@ async def run_backtest(settings: Settings, adapter: ExchangeAdapter, days: int |
         f"haftalık %{settings.risk.max_weekly_loss_pct} / zirveden %{settings.risk.max_total_drawdown_pct}; "
         f"test {pause}",
     ]
+    g = settings.capital_guard
+    if g.enabled:
+        header.append(f"Ana para koruması: taban başlangıcın %{_tr(float(g.max_loss_from_start_pct))} altı, "
+                      f"kârın %{_tr(float(g.lock_profit_pct))}'si kilitlenir; tabana inilirse acil durdurma")
     if "USDT" in by_quote:
         header.append("Dolar çiftlerinde aynı TL tutarı başta USDT'ye çevrilir; boştaki para dolar olarak "
                       "durur. Sonuç yine TL ve USD olarak gösterilir.")

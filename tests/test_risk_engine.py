@@ -46,8 +46,11 @@ def feed(md: MarketDataService, now: datetime, depth_try: str = "1000000") -> No
 
 
 class Rig:
-    def __init__(self, settings: Settings, tmp_path: Path, equity: str = "10000", **kw) -> None:
-        self.settings = settings
+    def __init__(self, settings: Settings, tmp_path: Path, equity: str = "10000", guard: bool = False,
+                 **kw) -> None:
+        # Most tests check one limit at a time; the capital guard has its own tests.
+        self.settings = settings if guard else settings.model_copy(
+            update={"capital_guard": settings.capital_guard.model_copy(update={"enabled": False})})
         self.md = MarketDataService(FakeAdapter({}), [BTC, ETH, USDT], settings.market_data)
         self.fx = FxRateService(self.md, settings.fx)
         self.portfolio = FakePortfolio(equity)
@@ -273,3 +276,63 @@ def test_limits_text_is_turkish(rig: Rig) -> None:
     text = rig.engine.limits_text()
     assert "Günlük zarar: %0,00 / %3,00" in text
     assert "Açık pozisyon: 0 / 2" in text
+
+
+# ----------------------------------------------------------------- capital guard
+
+@pytest.fixture
+def guarded(settings: Settings, tmp_path: Path) -> Rig:
+    r = Rig(settings, tmp_path, guard=True)
+    feed(r.md, T0)
+    r.engine.evaluate(T0)
+    return r
+
+
+def test_capital_floor_starts_just_under_the_money_put_in(guarded: Rig) -> None:
+    assert guarded.engine.capital_floor() == Decimal("9800")  # 10,000 TL - 2%
+    guard = guarded.engine.snapshot(T0)["capital_guard"]
+    assert guard["floor"] == "9800.00" and guard["headroom"] == "200.00" and guard["used_pct"] == "0.00"
+    assert "Ana para tabanı" in guarded.engine.limits_text()
+
+
+def test_capital_floor_rises_with_profit_and_never_falls(guarded: Rig) -> None:
+    guarded.portfolio.value = Decimal("11000")
+    guarded.engine.evaluate(T0)
+    assert guarded.engine.capital_floor() == Decimal("10300")  # 9,800 + half of the 1,000 gain
+    guarded.portfolio.value = Decimal("10500")
+    guarded.engine.evaluate(T0)
+    assert guarded.engine.capital_floor() == Decimal("10300")
+
+
+def test_falling_to_the_floor_closes_everything_until_owner_confirms(guarded: Rig) -> None:
+    guarded.portfolio.value = Decimal("9790")
+    guarded.engine.evaluate(T0)
+    assert guarded.engine.halt_level is HaltLevel.CLOSE_ALL
+    assert "capital_floor_halt" in guarded.kinds()
+    assert "sahibi" in guarded.engine.resume(by="jarvis")
+    assert "ONAY" in guarded.engine.resume()
+    assert guarded.engine.positions_must_close
+    guarded.engine.resume(confirm=True)
+    assert not any(h.kind == "floor" for h in guarded.engine.halts())
+    assert guarded.engine.capital_floor() == Decimal("9790") * Decimal("0.98")  # rebuilt from today
+
+
+def test_trade_size_keeps_every_open_trade_above_the_floor(guarded: Rig) -> None:
+    # 9,850 TL: 50 TL above the floor, shared by the 2 free slots -> 25 TL risk per trade.
+    guarded.portfolio.value = Decimal("9850")
+    guarded.engine.evaluate(T0)
+    qty = guarded.engine.max_quantity(BTC, Decimal("3500000"), Decimal("3400000"))
+    per_unit = Decimal("3500000") - Decimal("3400000") + Decimal("3500000") * 20 / 10_000
+    assert qty * per_unit == pytest.approx(Decimal(25))
+    big = guarded.engine.check_trade(TradeIntent(BTC, Decimal("0.001"), Decimal("3500000"), Decimal("3400000")), T0)
+    assert not big.allowed and any("Ana para koruması" in r for r in big.reasons)
+    ok = guarded.engine.check_trade(TradeIntent(BTC, qty, Decimal("3500000"), Decimal("3400000")), T0)
+    assert ok.allowed, ok.reasons
+
+
+def test_no_buy_while_sellers_dominate_the_book(rig: Rig) -> None:
+    p = Decimal(PRICES[BTC])
+    rig.md._books[BTC] = OrderBook(BTC, (BookLevel(p, Decimal("0.05")),), (BookLevel(p + 1, Decimal("0.5")),),
+                                   exchange_ts=T0, received_ts=T0)
+    decision = rig.engine.check_trade(good_intent(), T0)
+    assert any("satıcılar baskın" in r for r in decision.reasons)

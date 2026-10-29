@@ -16,6 +16,9 @@ Realism rules:
     and the drawdown emergency stop (closes everything). After the emergency stop
     the test pauses `drawdown_pause_days`, then resumes as if the owner typed
     "/devam ONAY" (peak reset), so the whole period is measured.
+  * The capital floor (capital_guard) works as live: trade sizes keep every open
+    trade above it, and touching it is an emergency stop like the drawdown one.
+    The floor is kept in the account's own money (USDT for a dollar account).
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from bisect import bisect_right
 
-from cryptobot.config import ExitConfig, PaperConfig, RiskLimits
+from cryptobot.config import CapitalGuardConfig, ExitConfig, PaperConfig, RiskLimits
 from cryptobot.domain.models import Candle, Symbol
 from cryptobot.strategy.base import Signal
 from cryptobot.strategy.exits import ExitState, on_bar_close
@@ -85,7 +88,7 @@ class Backtester:
     def __init__(
         self, strategy: TrendBreakoutStrategy, exits: ExitConfig, limits: RiskLimits,
         paper: PaperConfig, slippage_bps: float, capital: float, drawdown_pause_days: float = 7,
-        quote: str = "TRY",
+        quote: str = "TRY", guard: CapitalGuardConfig | None = None,
     ) -> None:
         self.strategy = strategy
         self.exits = exits
@@ -96,6 +99,8 @@ class Backtester:
         self.capital = capital  # always in TL
         self.quote = quote  # "TRY", or "USDT" (needs the USDT/TRY rate)
         self.dd_pause = timedelta(days=drawdown_pause_days) if drawdown_pause_days > 0 else None
+        # Capital floor as in the live risk engine, kept in the account's own money.
+        self.guard = guard if guard is not None and guard.enabled else None
 
     def run(
         self, series: dict[Symbol, list[Candle]], start: datetime, end: datetime,
@@ -127,6 +132,13 @@ class Backtester:
         day_start = week_start = peak = capital
         daily_halt = weekly_halt = dd_halt = False
         dd_resume_at: datetime | None = None
+        g_base = g_peak = capital
+
+        def floor() -> float | None:
+            if self.guard is None:
+                return None
+            return (g_base * (1 - float(self.guard.max_loss_from_start_pct) / 100)
+                    + max(0.0, g_peak - g_base) * float(self.guard.lock_profit_pct) / 100)
         bars_in_market = 0
         first_open: dict[Symbol, float] = {}
 
@@ -157,7 +169,12 @@ class Backtester:
                 return
             eq = equity()
             per_unit = price - stop + price * float(lim.assumed_round_trip_cost_bps) / 10_000
-            qty = min(eq * float(lim.max_risk_per_trade_pct) / 100 / per_unit,
+            budget = eq * float(lim.max_risk_per_trade_pct) / 100
+            fl = floor()
+            if fl is not None:  # all open trades stopping out together must stay above the floor
+                free = max(1, lim.max_concurrent_positions - len(positions))
+                budget = min(budget, max(0.0, eq - fl) / free)
+            qty = min(budget / per_unit,
                       eq * self.max_pos_frac / price,
                       cash * 0.98 / (price * (1 + self.fee)))
             if qty * price < min_order:
@@ -192,19 +209,23 @@ class Backtester:
             eq = equity()
             if dd_halt and dd_resume_at is not None and ts >= dd_resume_at:
                 dd_halt, dd_resume_at, peak = False, None, eq  # "/devam ONAY": peak reset
+                g_base = g_peak = eq  # the capital floor is rebuilt from here too
                 res.halts.append(f"{local:%d.%m.%Y}: acil durdurmadan sonra devam edildi (zirve sıfırlandı)")
             if dk != day_key:
                 day_key, day_start, daily_halt = dk, eq, False
             if wk != week_key:
                 week_key, week_start, weekly_halt = wk, eq, False
             peak = max(peak, eq)
+            g_peak = max(g_peak, eq)
             if not daily_halt and (day_start - eq) / day_start * 100 >= float(lim.max_daily_loss_pct):
                 daily_halt = True
                 res.halts.append(f"{local:%d.%m.%Y}: günlük zarar limiti doldu")
             if not weekly_halt and (week_start - eq) / week_start * 100 >= float(lim.max_weekly_loss_pct):
                 weekly_halt = True
                 res.halts.append(f"{local:%d.%m.%Y}: haftalık zarar limiti doldu")
-            if not dd_halt and (peak - eq) / peak * 100 >= float(lim.max_total_drawdown_pct):
+            fl = floor()
+            below_floor = fl is not None and eq <= fl
+            if not dd_halt and (below_floor or (peak - eq) / peak * 100 >= float(lim.max_total_drawdown_pct)):
                 dd_halt = True
                 res.drawdown_halts += 1
                 if self.dd_pause is not None:
@@ -212,7 +233,8 @@ class Backtester:
                     pause = f"{self.dd_pause.days} gün ara"
                 else:
                     pause = "test burada durur"
-                res.halts.append(f"{local:%d.%m.%Y}: zirveden düşüş limiti, ACİL DURDURMA ({pause})")
+                why = "ana para tabanına inildi" if below_floor else "zirveden düşüş limiti"
+                res.halts.append(f"{local:%d.%m.%Y}: {why}, ACİL DURDURMA ({pause})")
                 for sym in list(positions):
                     close(sym, last_close[sym] * (1 - self.slip), ts, "acil kapatma", "acil durdurma")
                 pending.clear()

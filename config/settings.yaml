@@ -46,6 +46,18 @@ risk:
   assumed_round_trip_cost_bps: 20  # fees + slippage added to each trade's risk
   warn_at_fraction: 0.7        # early warning at 70% of a loss limit
 
+# --- Capital guard (ana para koruması) ----------------------------------
+# The bot defends a floor just under the money put in: trade sizes are cut so
+# that even if every open trade hits its stop, the account stays above it.
+# If the account still touches the floor (e.g. a price gap), everything is sold
+# and the bot stops until you send "/devam ONAY". Every gain raises the floor:
+# half of the best profit so far is locked in. The floor cannot be exactly the
+# starting money, because every buy and sell pays a fee.
+capital_guard:
+  enabled: true
+  max_loss_from_start_pct: 2   # floor = starting capital - 2%
+  lock_profit_pct: 50          # floor rises by half of the best profit
+
 # --- Exchange --------------------------------------------------------
 exchange:
   name: okx
@@ -81,6 +93,9 @@ liquidity:
   min_24h_volume_try: 5000000   # min traded value in the last 24 hours
   depth_band_bps: 50
   alert_after_seconds: 120      # warn only if a pair stays unfit this long
+  # No buy while sellers clearly outweigh buyers near the price
+  # (-1 = only sellers, 0 = balanced, +1 = only buyers).
+  min_book_imbalance: -0.3
 
 # --- Paper (practice) account ------------------------------------------
 # Fake money only. Buys and sells are simulated against the real OKX order
@@ -178,6 +193,22 @@ jarvis:
   enabled: true
   host: 127.0.0.1   # only programs on this computer can connect
   port: 8765
+  # summary = Jarvis only gets the end-of-day summary; all = every alert too.
+  # The bot never waits for Jarvis: it runs the same when Jarvis is off.
+  webhook_events: summary
+
+# --- End-of-day summary ------------------------------------------------
+# One short summary every evening: Telegram message + Jarvis + saved to a file.
+# If the bot was off at that time, yesterday's summary is written at the next start.
+daily_summary:
+  enabled: true
+  at: "23:55"       # Turkey time (keep the quotes)
+  file: data/daily_summaries.jsonl
+
+# Windows: do not let the computer go to sleep while the bot runs
+# (the screen can still turn off). Use ArkaPlanda-Calistir.bat to run the
+# bot hidden and start it automatically with Windows.
+keep_awake: true
 
 # --- Control Center (Phase 5) ------------------------------------------
 # One screen with everything: balance, positions, trades, limits, health

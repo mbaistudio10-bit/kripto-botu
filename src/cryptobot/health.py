@@ -92,11 +92,14 @@ def _protection(settings: Settings) -> Part:
         else:
             score -= 3
             notes.append("gerçek para modu")
+    if not settings.capital_guard.enabled:
+        score -= 2
+        notes.append("ana para koruması kapalı")
     if settings.market_type is not MarketType.SPOT or settings.leverage != 1:
         score -= 3
         notes.append("kaldıraç/vadeli açık")
     if not notes:
-        notes.append("Tüm zarar sınırları açık ve ilk ayarlarda; spot, kaldıraçsız, deneme parası.")
+        notes.append("Tüm zarar sınırları ve ana para koruması açık; spot, kaldıraçsız, deneme parası.")
     return Part("protection", "Risk korumaları", max(score, 0), "; ".join(notes))
 
 
@@ -110,6 +113,9 @@ def _headroom(snap: dict[str, Any]) -> Part:
         ("haftalık", _dec(risk.get("weekly_loss_pct")), _dec(lim["max_weekly_loss_pct"])),
         ("zirveden", _dec(risk.get("drawdown_pct")), _dec(lim["max_total_drawdown_pct"])),
     ]
+    guard = risk.get("capital_guard")
+    if guard:
+        used.append(("ana para tabanına kalan pay", _dec(guard["used_pct"]), Decimal(100)))
     worst_name, worst = "", Decimal(0)
     for name, value, limit in used:
         share = max(value, Decimal(0)) / limit if limit > 0 else Decimal(1)

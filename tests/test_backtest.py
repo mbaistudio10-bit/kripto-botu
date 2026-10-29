@@ -129,6 +129,19 @@ def test_after_drawdown_halt_trading_resumes_after_pause(settings: Settings) -> 
     assert len(stopped.trades) < len(res.trades)
 
 
+def test_capital_floor_stops_losses_near_the_start(settings: Settings) -> None:
+    # Steady losers: the guard shrinks each trade so the account settles just above the floor.
+    n = 24 * 6
+    candles = from_closes([100.0 * 0.995**i for i in range(n)], spread=0.0)
+    strat = StubStrategy(set(range(1, n, 6)), stop_dist=0.3)
+    guarded = Backtester(strat, settings.exits, settings.risk, settings.paper, 10, 10_000.0,
+                         drawdown_pause_days=0, guard=settings.capital_guard).run({BTC: candles}, T0, T0 + n * H)
+    assert guarded.end_equity >= 10_000.0 * 0.98 * 0.999  # floor = start - 2%
+    plain = Backtester(strat, settings.exits, settings.risk, settings.paper, 10, 10_000.0,
+                       drawdown_pause_days=0).run({BTC: candles}, T0, T0 + n * H)
+    assert plain.end_equity < guarded.end_equity
+
+
 def test_variants_are_fixed_and_start_with_current_settings(settings: Settings) -> None:
     from cryptobot.backtest.variants import variants
 

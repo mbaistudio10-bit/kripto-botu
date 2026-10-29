@@ -28,6 +28,9 @@ class RiskState:
     drawdown_halt: bool = False
     delist_halts: list[str] = field(default_factory=list)
     approved_limits: dict[str, str] | None = None
+    guard_base: Decimal | None = None  # starting capital in TRY for the capital floor
+    guard_peak: Decimal | None = None  # best equity since guard_base was set
+    floor_halt: bool = False
 
     def to_json(self) -> dict[str, Any]:
         return {k: str(v) if isinstance(v, Decimal) else v for k, v in asdict(self).items()}
@@ -35,7 +38,7 @@ class RiskState:
     @classmethod
     def from_json(cls, raw: dict[str, Any]) -> RiskState:
         state = cls()
-        for key in ("peak_equity", "day_start_equity", "week_start_equity"):
+        for key in ("peak_equity", "day_start_equity", "week_start_equity", "guard_base", "guard_peak"):
             if raw.get(key) is not None:
                 setattr(state, key, Decimal(raw[key]))
         for key in ("day_key", "week_key"):
@@ -45,6 +48,7 @@ class RiskState:
         state.daily_halt_day = raw.get("daily_halt_day")
         state.weekly_halt_week = raw.get("weekly_halt_week")
         state.drawdown_halt = bool(raw.get("drawdown_halt", False))
+        state.floor_halt = bool(raw.get("floor_halt", False))
         state.delist_halts = list(raw.get("delist_halts", []))
         state.approved_limits = raw.get("approved_limits")
         return state

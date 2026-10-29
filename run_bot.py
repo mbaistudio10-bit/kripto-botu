@@ -14,6 +14,7 @@ from cryptobot.__main__ import main  # noqa: E402
 
 if __name__ == "__main__":
     code = main()
-    if getattr(sys, "frozen", False):
+    quiet = {"--background", "--autostart"} & set(sys.argv)  # no window, or a .bat that pauses itself
+    if getattr(sys, "frozen", False) and not quiet:
         input("\nKapatmak için Enter'a basın...")
     sys.exit(code)
