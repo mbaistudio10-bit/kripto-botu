@@ -1,14 +1,13 @@
 """End-of-day summary: one short message per day for the owner and Jarvis.
 
-At the configured local time (default 23:55 Turkey time) the bot writes the day's
-summary: profit, trades, coins, balance, open positions, protection and health.
+At the configured local time (default 22:00 Turkey time) the bot writes a summary
+of the 24 hours up to then (so nothing between two summaries is left out): profit, trades, coins, balance, open positions, protection and health.
 It is sent to Telegram as one message, pushed to Jarvis (if a webhook is set; retried
 until Jarvis is reachable) and stored in data/daily_summaries.jsonl, so Jarvis can
 also fetch it later with GET /api/v1/daily-summary. The bot itself never depends on
 Jarvis: if Jarvis is off, nothing else changes.
 
-If the bot was off at summary time, the missing summary for yesterday is written at
-the next start.
+If the bot was off at summary time, the missing summary is written at the next start.
 """
 
 from __future__ import annotations
@@ -38,13 +37,21 @@ def _d(value: Any) -> Decimal:
         return Decimal(0)
 
 
-def build_summary(
-    day: date, snap: dict[str, Any], events: EventLog, utc_offset_hours: int,
-) -> dict[str, Any]:
-    """Summary of one local calendar day. `snap` is the status snapshot at the time of writing."""
+def summary_window(day: date, at: time | None, utc_offset_hours: int) -> tuple[datetime, datetime]:
+    """UTC [start, end) covered by the summary of `day`: the 24 hours up to `at` local time
+    on that day, or the whole local calendar day when `at` is None."""
     offset = timedelta(hours=utc_offset_hours)
-    start = datetime.combine(day, time(0), tzinfo=timezone.utc) - offset
-    end = start + timedelta(days=1)
+    end = datetime.combine(day, at or time(0), tzinfo=timezone.utc) - offset
+    if at is None:
+        end += timedelta(days=1)
+    return end - timedelta(days=1), end
+
+
+def build_summary(
+    day: date, snap: dict[str, Any], events: EventLog, utc_offset_hours: int, at: time | None = None,
+) -> dict[str, Any]:
+    """Summary of `day` (see summary_window). `snap` is the status snapshot at the time of writing."""
+    start, end = summary_window(day, at, utc_offset_hours)
     report = build_report((e for e in events.read_since(start) if e.time < end), "gün", start)
     pf = snap.get("portfolio") or {}
     risk = snap.get("risk") or {}
@@ -58,7 +65,7 @@ def build_summary(
         lines.append(f"Kazanç: {sign}{fmt_try(report.pnl_try)} (≈ {report.pnl_usd:+.2f} USD)")
         lines.append(f"İşlemler: {report.trades} (kârlı {report.wins}, zararlı {report.losses}) · {coins}")
     else:
-        lines.append("Bugün kapanan işlem yok. (Strateji net bir yükseliş bekliyor; bu normaldir.)")
+        lines.append("Son 24 saatte kapanan işlem yok. (Strateji net bir yükseliş bekliyor; bu normaldir.)")
     if pf:
         lines.append(f"Bakiye: {fmt_try(_d(pf.get('equity_try')))} (≈ {fmt_num(_d(pf.get('equity_usd')))} USD), "
                      f"başlangıca göre {'+' if _d(pf.get('total_change_try')) >= 0 else ''}"
@@ -147,21 +154,21 @@ class DailySummaryTask:
         return target - self._offset
 
     def write(self, day: date) -> dict[str, Any]:
-        summary = build_summary(day, self._snapshot(), self._events, self._hours)
+        summary = build_summary(day, self._snapshot(), self._events, self._hours, self._at)
         self._store.add(summary)
         self._events.emit(Level.BILGI, DAILY_SUMMARY, summary["text"], notify=True,
                           key=summary["date"], summary=summary)
         return summary
 
     def catch_up(self, now: datetime) -> dict[str, Any] | None:
-        """Write yesterday's summary if the bot was off at summary time and ran yesterday."""
-        yesterday = self._local_now(now).date() - timedelta(days=1)
-        if self._store.get(yesterday.isoformat()) is not None:
+        """Write the last due summary if the bot was off at summary time but ran in its 24 hours."""
+        due = self.next_run(now) - timedelta(days=1)
+        day = self._local_now(due).date()
+        if self._store.get(day.isoformat()) is not None:
             return None
-        start = datetime.combine(yesterday, time(0), tzinfo=timezone.utc) - self._offset
-        end = start + timedelta(days=1)
-        ran_yesterday = any(e.time < end for e in self._events.read_since(start))
-        return self.write(yesterday) if ran_yesterday else None
+        start, end = summary_window(day, self._at, self._hours)
+        ran = any(e.time < end for e in self._events.read_since(start))
+        return self.write(day) if ran else None
 
     async def run(self) -> None:
         try:

@@ -13,7 +13,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from cryptobot.api.jarvis import JarvisApi, JarvisWebhook
-from cryptobot.daily import DAILY_SUMMARY, DailySummaryTask, SummaryStore, build_summary
+from cryptobot.daily import DAILY_SUMMARY, DailySummaryTask, SummaryStore, build_summary, summary_window
 from cryptobot.events import EventLog, emit_trade_closed
 from tests.test_notify import CONTROL_KEY, READ_KEY, auth
 
@@ -26,7 +26,7 @@ SNAP = {
 
 
 def _task(tmp_path: Path, events: EventLog) -> DailySummaryTask:
-    return DailySummaryTask(lambda: SNAP, events, SummaryStore(tmp_path / "s.jsonl"), time(23, 55), 3,
+    return DailySummaryTask(lambda: SNAP, events, SummaryStore(tmp_path / "s.jsonl"), time(22, 0), 3,
                             datetime.now(timezone.utc))
 
 
@@ -54,10 +54,25 @@ def test_summary_is_stored_announced_and_runs_at_the_set_time(tmp_path: Path) ->
     task.write(date(2026, 10, 28))
     assert seen[-1].kind == DAILY_SUMMARY and seen[-1].should_notify
     assert task._store.get()["date"] == "2026-10-28"
-    # 20:00 UTC = 23:00 Turkey: next run is 23:55 Turkey = 20:55 UTC the same day.
-    now = datetime(2026, 10, 28, 20, 0, tzinfo=timezone.utc)
-    assert task.next_run(now) == datetime(2026, 10, 28, 20, 55, tzinfo=timezone.utc)
-    assert task.next_run(now + timedelta(hours=1)) == datetime(2026, 10, 29, 20, 55, tzinfo=timezone.utc)
+    # 18:00 UTC = 21:00 Turkey: next run is 22:00 Turkey = 19:00 UTC the same day.
+    now = datetime(2026, 10, 28, 18, 0, tzinfo=timezone.utc)
+    assert task.next_run(now) == datetime(2026, 10, 28, 19, 0, tzinfo=timezone.utc)
+    assert task.next_run(now + timedelta(hours=1)) == datetime(2026, 10, 29, 19, 0, tzinfo=timezone.utc)
+
+
+def test_summary_covers_the_24_hours_up_to_the_summary_time(tmp_path: Path) -> None:
+    events = EventLog(tmp_path / "e.jsonl")
+    day = date(2026, 10, 28)
+    start, end = summary_window(day, time(22, 0), 3)
+    # 27.10 22:00 Turkey -> 28.10 22:00 Turkey: a late-evening trade lands in the next summary.
+    assert start == datetime(2026, 10, 27, 19, 0, tzinfo=timezone.utc)
+    assert end == datetime(2026, 10, 28, 19, 0, tzinfo=timezone.utc)
+    late = {"time": (end + timedelta(minutes=30)).isoformat(), "level": "BILGI", "kind": "trade_closed",
+            "message": "x", "data": {"symbol": "ETH/USDT", "pnl_try": "10", "pnl_usd": "0.3"}}
+    (tmp_path / "e.jsonl").write_text(json.dumps(late) + "\n", encoding="utf-8")
+    trades = lambda d: build_summary(d, SNAP, events, 3, time(22, 0))["report"]["categories"][  # noqa: E731
+        "Al-sat işlemleri"]["total"]
+    assert trades(day) == 0 and trades(day + timedelta(days=1)) == 1
 
 
 def test_missed_summary_is_written_at_next_start(tmp_path: Path) -> None:
@@ -69,7 +84,8 @@ def test_missed_summary_is_written_at_next_start(tmp_path: Path) -> None:
                  "message": "Bot başladı.", "data": {}}
     (tmp_path / "e.jsonl").write_text(json.dumps(yesterday) + "\n", encoding="utf-8")
     written = task.catch_up(now)
-    assert written is not None and written["date"] == ((now + timedelta(hours=3)).date() - timedelta(days=1)).isoformat()
+    due = task.next_run(now) - timedelta(days=1)
+    assert written is not None and written["date"] == (due + timedelta(hours=3)).date().isoformat()
     assert task.catch_up(now) is None  # only once
 
 
@@ -91,7 +107,7 @@ async def test_jarvis_gets_only_the_summary_and_can_fetch_it_later(tmp_path: Pat
         events.subscribe(wh.on_event)
         emit_trade_closed(events, trade_id="a", symbol="BTC/USDT", quantity=Decimal("0.001"),
                           price=Decimal("100000"), pnl_try=Decimal("10"), pnl_usd=Decimal("0.3"))
-        DailySummaryTask(lambda: SNAP, events, store, time(23, 55), 3, datetime.now(timezone.utc)).write(
+        DailySummaryTask(lambda: SNAP, events, store, time(22, 0), 3, datetime.now(timezone.utc)).write(
             date(2026, 10, 28))
         run = asyncio.create_task(wh.run())
         for _ in range(100):

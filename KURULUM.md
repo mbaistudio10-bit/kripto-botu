@@ -148,7 +148,7 @@ Bu anahtarları sadece Jarvis'e verin. Jarvis'in yapabildikleri:
 Jarvis'in **yapamadıkları:** emir göndermek, limit değiştirmek, sizin yaptığınız durdurmayı veya zarar limiti/acil durdurmayı kaldırmak.
 Jarvis botu her durdurduğunda size Telegram'dan haber gelir.
 
-**Gün sonu özeti:** Bot her akşam **23:55'te** (TR saati) günün kısa bir özetini yazar: kazanç, işlemler, coinler,
+**Gün sonu özeti:** Bot her akşam **22:00'de** (TR saati) son 24 saatin kısa bir özetini yazar: kazanç, işlemler, coinler,
 bakiye, açık pozisyonlar, ana para tabanı ve sağlık puanı. Bu özet:
 - Telegram'dan (Achilles) size gelir,
 - Jarvis'e gönderilir (Jarvis kapalıysa, açılana kadar yaklaşık 24 saat boyunca tekrar denenir),
