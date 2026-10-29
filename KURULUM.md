@@ -1,7 +1,8 @@
 # Kripto Botu: Kurulum ve Kullanım Rehberi
 
 > **Önemli:** Bu yazılım yatırım tavsiyesi değildir. Geçmiş performans gelecekteki getiriyi garanti etmez.
-> Bot şu an **gerçek emir göndermez**. Bir trend stratejisiyle sahte parayla (10.000 TL) deneme işlemleri yapar, riskleri izler ve size Telegram'dan (Achilles) haber verir.
+> Normal başlatmada bot **gerçek emir göndermez**: trend stratejisiyle sahte parayla (10.000 TL) deneme işlemleri yapar.
+> Gerçek para modu ayrı, bilerek açılan bir moddur: **bölüm 10**.
 
 Kodlama bilgisi gerekmez. Python kurmanıza da gerek yok.
 
@@ -279,6 +280,53 @@ Bu anahtarı ve `/panel` mesajını kimseyle paylaşmayın. Üst üste 10 yanlı
 Kontrol Merkezi emir veremez ve limit değiştiremez. Anahtarı değiştirmek için `.env` içindeki `PANEL_KEY` satırını silip botu yeniden başlatın.
 
 ---
+
+## 10. Gerçek para modu (OKX TR) — dikkatle okuyun
+
+**Dürüst uyarı:** Geçmiş veri testlerinde kural "al ve tut"un altında kaldı ve dolar bazında zarardaydı. Deneme sonuçları
+birkaç günlük. Kâr garantisi yoktur, kaybetme ihtimali gerçektir. **Sadece kaybetmeyi göze alabileceğiniz para ile**
+ve küçük başlayın. Bot sizin yerinize alım-satım yapar; her işlem Telegram'a gelir.
+
+### 10a. Güvenlik kuralları (bot bunları kendisi de kontrol eder)
+- API anahtarında sadece **Okuma + Al-Sat** izni olmalı. **Çekim (para çıkarma) izni KAPALI** olmalı.
+  Çekim izni açıksa bot gerçek modda **hiç başlamaz**.
+- Anahtarlar sadece bilgisayarınızdaki **`.env`** dosyasında durur. Kimseyle ve hiçbir sohbette paylaşmayın.
+- Anahtarı mümkünse OKX TR'de **IP adresinize kilitleyin**.
+- Botun kullanabileceği para: `config/canli.yaml` içindeki `max_capital_try` (şimdilik **400 TL**).
+  Hesabınızda daha fazla para olsa bile bot en fazla bu kadarına dokunur.
+- Mevcut tüm korumalar gerçekte de çalışır: günlük %3 / haftalık %6 / toplam %10 sınırları, işlem başına %1 risk,
+  en fazla 2 pozisyon, ana para koruması, acil durdurma (Telegram `/durdur`, Kontrol Merkezi, Jarvis).
+- Alış emri, en iyi satış fiyatının en fazla %0,3 üstüne konur (fiyat aniden sıçrarsa daha pahalıya almaz).
+  Satış her zaman piyasa emridir (çıkış engellenmez). 24 saatte en fazla 6 alış yapılır.
+- Bot, kendi kayıtlarını dakikada bir borsadaki gerçek bakiyeyle karşılaştırır. Uyuşmazsa (örneğin uygulamadan
+  elle coin sattıysanız) **kendini durdurur** ve Telegram'dan haber verir. Bot çalışırken elle alım-satım yapmayın.
+- **Önemli sınır:** Zarar-kes (stop) bu program tarafından izlenir, borsada ayrı bir stop emri yoktur.
+  Bilgisayar kapalı, internet yok veya bot durmuşsa açık pozisyon korumasız kalır. Bu yüzden küçük tutarla başlıyoruz.
+
+### 10b. Hazırlık
+1. OKX TR'de **API anahtarı** oluşturun (izinler: Okuma + Al-Sat, Çekim kapalı). Üç bilgi alırsınız: anahtar, gizli anahtar, parola.
+2. `.env` dosyasına şu üç satırı yazın (eşittirin sağına kendi değerinizi, tırnaksız):
+   ```
+   OKX_API_KEY=...
+   OKX_API_SECRET=...
+   OKX_API_PASSPHRASE=...
+   ```
+3. OKX TR'de botun işlem yapacağı para birimini hazırlayın. Bot BTC/USDT ve ETH/USDT ile çalışır, bu yüzden hesapta
+   **USDT** olmalı (TL'nizi uygulamadaki **Dönüştür** bölümünden USDT'ye çevirin). Bot para birimi çevirmez.
+4. Deneme botu arka planda çalışıyorsa önce **ArkaPlan-Durdur** dosyasına çift tıklayın (iki bot aynı anda çalışamaz).
+
+### 10c. Önce küçük bir gerçek test
+**CanliTest** dosyasına çift tıklayın. Önce `config/canli.yaml` içinde `confirmed: false` satırını `confirmed: true` yapın
+(gerçek parayla işlem yapmak istediğinizi bilerek onaylamanız için). Bot anahtarları ve izinleri kontrol eder,
+yaklaşık 30 TL'lik **gerçek** bir alış yapıp hemen satar ve komisyon dahil sonucu yazar (birkaç kuruş kayıp normaldir).
+Başlamadan önce sizden **EVET** yazmanızı ister. Bu test başarılı olmadan canlı moda geçmeyin.
+
+### 10d. Canlı modu başlatma
+**CanliBaslat** dosyasına çift tıklayın. Pencerede "GERÇEK PARA MODU" yazar, Kontrol Merkezi'nde ve Telegram'da
+işlemlerin yanında **(GERÇEK PARA)** etiketi görünür. İlk günlerde pencereyi açık tutup izleyin.
+Canlı mod kendi dosyalarını kullanır (`data/live_state.json`, `data/events_live.jsonl`); deneme hesabınız etkilenmez.
+
+**Denemeye geri dönmek için:** CanliBaslat'ı kapatın, normal **KriptoBotu** dosyasını açın.
 
 ## 9. Dosyalar nerede?
 - `.env`: gizli anahtarlar: Telegram, Jarvis, Kontrol Merkezi (kimseyle paylaşmayın)

@@ -125,7 +125,7 @@ code{font:13px ui-monospace,Consolas,monospace;background:var(--line);padding:1p
 
   <section data-tab="ozet" class="grid">
     <div class="grid two">
-      <div class="card"><h2>Deneme hesabı</h2>
+      <div class="card"><h2 id="acctitle">Deneme hesabı</h2>
         <div class="big" id="equity">–</div><div class="sub" id="equityusd"></div>
         <div id="acct" style="margin-top:10px"></div>
       </div>
@@ -214,7 +214,8 @@ async function refresh(){try{STATE=await api("state");$("offline").classList.add
 catch(e){if(e.message!=="auth")$("offline").classList.remove("hide")}}
 
 function render(){const s=STATE,risk=s.risk||{},pf=s.portfolio||null,h=s.health||null;
-$("mode").textContent=s.mode==="PAPER_TRADING"?"Deneme parası":s.mode==="READ_ONLY"?"Sadece izleme":s.mode;
+$("acctitle").textContent=pf&&pf.paper===false?"Gerçek hesap (botun payı)":"Deneme hesabı";
+$("mode").textContent=s.mode==="LIVE_TRADING"?"GERÇEK PARA":s.mode==="PAPER_TRADING"?"Deneme parası":s.mode==="READ_ONLY"?"Sadece izleme":s.mode;
 const p=$("pill");if(risk.halts&&risk.halts.length){p.textContent="Durduruldu";p.className="pill bad"}
 else if(s.new_positions_allowed){p.textContent="Normal";p.className="pill good"}else{p.textContent="Bekliyor";p.className="pill warn"}
 // account

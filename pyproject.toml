@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cryptobot"
-version = "0.7.3"
-description = "Multi-currency crypto trading bot (Phase 4: trend strategy + backtest, paper trading)"
+version = "0.8.0"
+description = "Multi-currency crypto trading bot (trend strategy, backtest, paper and live spot trading)"
 requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.9,<4",

@@ -11,6 +11,7 @@ import sys
 import time
 import webbrowser
 from datetime import datetime, timezone
+from decimal import Decimal
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -32,6 +33,8 @@ from cryptobot.exchanges.registry import create_adapter
 from cryptobot.health import Links, health
 from cryptobot.market_data.candles import CandleService
 from cryptobot.market_data.fx import FxRateService
+from cryptobot.live.setup import LiveContext, prepare_live, run_selftest
+from cryptobot.live.trader import LiveTrader
 from cryptobot.market_data.service import MarketDataService, check_pairs
 from cryptobot.notify.telegram import TelegramApi, TelegramBot, parse_chat_id
 from cryptobot.report import build_report, period_start
@@ -44,6 +47,10 @@ from cryptobot.strategy.trend import TrendBreakoutStrategy, bar_name
 
 log = logging.getLogger("cryptobot")
 
+LIVE_DISCLAIMER = (
+    "GERÇEK PARA MODU: bot OKX TR hesabınızda gerçek alım-satım emri gönderir. Zarar etme ihtimali vardır, "
+    "kâr garantisi yoktur. Yatırım tavsiyesi değildir. Acil durdurma: Ctrl+C, Telegram /durdur veya Kontrol Merkezi."
+)
 DISCLAIMER = (
     "Bu yazılım yatırım tavsiyesi değildir. Geçmiş performans gelecekteki getiriyi "
     "garanti etmez. Faz 5: trend stratejisiyle sahte parayla deneme işlemleri yapar, "
@@ -193,18 +200,28 @@ async def run(settings: Settings, once: bool, background: bool = False) -> int:
             print("\nAyar dosyasındaki çiftlerin hiçbiri bulunamadı. Bot durduruluyor.")
             return 3
 
+        live = settings.trading_mode is TradingMode.LIVE_TRADING and not once
+        live_ctx: LiveContext | None = None
+        if live:
+            live_ctx = await prepare_live(adapter, settings, pairs, settings.live.state_file.exists())
+            if live_ctx is None:
+                return 1  # a settings/keys problem: restarting would not help
+
         md = MarketDataService(adapter, pairs, settings.market_data)
         fx = FxRateService(md, settings.fx)
         paper_error = None
+        if live_ctx is not None:
+            capital, capital_ccy, state_file = live_ctx.start_cash, settings.paper.cash_currency, settings.live.state_file
+        else:
+            capital, capital_ccy = settings.starting_capital, settings.starting_capital_currency
+            state_file = None if once else settings.paper.state_file
         try:
-            portfolio = PaperPortfolio(
-                settings.starting_capital, settings.starting_capital_currency, settings.risk_currency,
-                md, fx, None if once else settings.paper.state_file,
-            )
+            portfolio = PaperPortfolio(capital, capital_ccy, settings.risk_currency, md, fx, state_file)
         except PaperStateError as exc:
             paper_error = exc
-            portfolio = PaperPortfolio(settings.starting_capital, settings.starting_capital_currency,
+            portfolio = PaperPortfolio(capital or settings.starting_capital, capital_ccy,
                                        settings.risk_currency, md, fx, None)
+        portfolio.paper = live_ctx is None
         engine = RiskEngine(
             settings, md, fx,
             portfolio=portfolio,
@@ -216,12 +233,17 @@ async def run(settings: Settings, once: bool, background: bool = False) -> int:
 
         if paper_error is not None:
             log.error("paper account unreadable: %s", paper_error)
-            engine.stop("Deneme hesabı dosyası (data/paper_state.json) okunamadı")
+            engine.stop(f"Hesap dosyası ({state_file}) okunamadı")
         elif portfolio.restored:
-            print(f"Deneme hesabı kaldığı yerden devam ediyor: {len(portfolio.positions)} açık pozisyon.")
+            print(f"{'Gerçek hesap kayıtları' if live_ctx else 'Deneme hesabı'} kaldığı yerden devam ediyor: "
+                  f"{len(portfolio.positions)} açık pozisyon.")
         strategy_pairs = [p for p in settings.strategy.pairs if p in pairs]
-        trader = PaperTrader(portfolio, engine, md, events, settings.paper,
-                             set(settings.strategy.pairs) if settings.strategy.enabled else None)
+        traded = set(settings.strategy.pairs) if settings.strategy.enabled else None
+        if live_ctx is not None:
+            trader: PaperTrader = LiveTrader(portfolio, engine, md, events, settings.paper, settings.live,
+                                             live_ctx.client, live_ctx.instruments, traded)
+        else:
+            trader = PaperTrader(portfolio, engine, md, events, settings.paper, traded)
         candles = CandleService(adapter, strategy_pairs, settings.strategy.bar_minutes,
                                 settings.strategy.history_bars, settings.strategy.refresh_seconds,
                                 None if once else settings.backtest.cache_dir)
@@ -310,8 +332,11 @@ async def run(settings: Settings, once: bool, background: bool = False) -> int:
                                          settings.risk.reset_utc_offset_hours, started_at)
                 tasks.append(asyncio.create_task(daily.run(), name="daily-summary"))
             tasks.append(asyncio.create_task(_refresh_listing(adapter, settings, engine)))
-            if settings.trading_mode is TradingMode.PAPER_TRADING:
-                tasks.append(asyncio.create_task(trader.run(), name="paper-trader"))
+            if settings.trading_mode in (TradingMode.PAPER_TRADING, TradingMode.LIVE_TRADING):
+                tasks.append(asyncio.create_task(trader.run(), name="trader"))
+                if isinstance(trader, LiveTrader):
+                    tasks.append(asyncio.create_task(trader.reconcile_loop(), name="live-reconcile"))
+                    print(LIVE_DISCLAIMER)
                 if settings.strategy.enabled and strategy_pairs:
                     tasks.append(asyncio.create_task(candles.run(), name="candles"))
                     tasks.append(asyncio.create_task(runner.run(), name="strategy"))
@@ -356,6 +381,11 @@ async def run(settings: Settings, once: bool, background: bool = False) -> int:
             await session.close()
 
 
+async def live_test(settings: Settings, value_try: float) -> int:
+    async with create_adapter(settings.exchange) as adapter:
+        return await run_selftest(adapter, settings, Decimal(str(value_try)))
+
+
 async def backtest(settings: Settings, days: int | None) -> int:
     print("\nGEÇMİŞ VERİ TESTİ: strateji geçmiş fiyatlar üzerinde denenecek. Bu birkaç dakika sürebilir.")
     async with create_adapter(settings.exchange) as adapter:
@@ -374,6 +404,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--once", action="store_true", help="print one snapshot and exit")
     parser.add_argument("--backtest", action="store_true", help="test the strategy on past prices")
     parser.add_argument("--days", type=int, default=None, help="backtest length in days")
+    parser.add_argument("--live", action="store_true",
+                        help="REAL MONEY: apply config/canli.yaml on top of the settings (trading_mode LIVE_TRADING)")
+    parser.add_argument("--live-test", action="store_true",
+                        help="real-money self-test: buy a tiny amount and sell it again (asks for EVET first)")
+    parser.add_argument("--live-test-tl", type=float, default=30.0, help="size of the live self-test in TL")
     parser.add_argument("--background", action="store_true",
                         help="run hidden without a window; restart after a crash or lost internet")
     parser.add_argument("--autostart", choices=["on", "off"],
@@ -384,18 +419,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.background:
         hide_console()
 
+    overlay = Path(args.config).with_name("canli.yaml") if (args.live or args.live_test) else None
     try:
-        settings = load_settings(args.config)
+        settings = load_settings(args.config, overlay)
     except (OSError, ValueError, ValidationError) as exc:
         print(f"Ayar dosyası okunamadı veya hatalı ({args.config}):\n{exc}")
         return 1
 
     setup_logging(settings.status.log_file)
-    print(DISCLAIMER)
+    print(LIVE_DISCLAIMER if settings.trading_mode is TradingMode.LIVE_TRADING else DISCLAIMER)
     log.info("starting, mode=%s exchange=%s", settings.trading_mode.value, settings.exchange.name)
     try:
         if args.backtest:
             return asyncio.run(backtest(settings, args.days))
+        if args.live_test:
+            return asyncio.run(live_test(settings, args.live_test_tl))
         if args.once:
             return asyncio.run(run(settings, True))
         return supervise(settings, args.background)

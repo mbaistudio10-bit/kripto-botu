@@ -153,7 +153,7 @@ def emit_trade_opened(
     paper: bool = True, note: str | None = None,
 ) -> Event:
     """note: why the bot bought, in Turkish (the strategy's rationale)."""
-    tag = " (deneme)" if paper else ""
+    tag = " (deneme)" if paper else " (GERÇEK PARA)"
     stop = f"\nZarar-kes (stop): {fmt_num(stop_price)}" if stop_price is not None else ""
     target = f"\nHedef: {fmt_num(target_price)}" if target_price is not None else ""
     return events.emit(
@@ -172,7 +172,7 @@ def emit_trade_closed(
     paper: bool = True,
 ) -> Event:
     """reason: 'satış' (normal exit), 'stop-loss' or 'acil kapatma'. note: why, in Turkish."""
-    tag = " (deneme)" if paper else ""
+    tag = " (deneme)" if paper else " (GERÇEK PARA)"
     stop = reason == "stop-loss"
     head = f"🛑 STOP-LOSS ÇALIŞTI{tag}: {symbol}" if stop else f"💰 SATIŞ{tag}: {symbol}"
     sign = "+" if pnl_try >= 0 else ""

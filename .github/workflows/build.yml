@@ -35,10 +35,10 @@ jobs:
         run: |
           mkdir -p out/KriptoBotu/config
           cp -R dist/KriptoBotu/. out/KriptoBotu/
-          cp config/settings.yaml out/KriptoBotu/config/
+          cp config/settings.yaml config/canli.yaml out/KriptoBotu/config/
           cp KURULUM.md out/KriptoBotu/
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cp packaging/GeriyeTest.bat packaging/ArkaPlanda-Calistir.bat packaging/ArkaPlan-Durdur.bat out/KriptoBotu/
+            cp packaging/GeriyeTest.bat packaging/ArkaPlanda-Calistir.bat packaging/ArkaPlan-Durdur.bat packaging/CanliTest.bat packaging/CanliBaslat.bat out/KriptoBotu/
           else
             cp packaging/GeriyeTest.command out/KriptoBotu/ && chmod +x out/KriptoBotu/GeriyeTest.command
           fi

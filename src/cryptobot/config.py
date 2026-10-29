@@ -12,8 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from cryptobot.domain.models import MarketType, Symbol, TradingMode
 
-# Modes the bot may run in today. LIVE_TRADING stays off until a later phase.
-ALLOWED_MODES = {TradingMode.READ_ONLY, TradingMode.PAPER_TRADING}
+# Modes the bot may run in. LIVE_TRADING (real money) also needs live.confirmed: true
+# and API keys in .env; see live/setup.py.
+ALLOWED_MODES = {TradingMode.READ_ONLY, TradingMode.PAPER_TRADING, TradingMode.LIVE_TRADING}
 
 # Fields of RiskLimits where a bigger number means more risk.
 RISK_LIMIT_FIELDS = (
@@ -165,6 +166,32 @@ class PaperConfig(_Strict):
     cash_currency: str = "USDT"
 
 
+class LiveConfig(_Strict):
+    """Real-money trading on the exchange. Only used when trading_mode is LIVE_TRADING.
+
+    The bot keeps its own books (a "bot share" of the exchange account) in state_file and
+    never touches more than max_capital_try of it, whatever the exchange balance is.
+    """
+
+    # The owner's deliberate "yes, real money". The bot refuses to start live while this is false.
+    confirmed: bool = False
+    # The bot may use at most this much money (in TL) in total, profit included in its own books.
+    max_capital_try: Decimal = Field(default=Decimal(400), gt=0)
+    state_file: Path = Path("data/live_state.json")
+    # Live runs keep their own files so practice (paper) numbers never mix with real ones.
+    events_file: Path = Path("data/events_live.jsonl")
+    risk_state_file: Path = Path("data/risk_state_live.json")
+    daily_summary_file: Path = Path("data/daily_summaries_live.jsonl")
+    # A buy is a limit order (immediate-or-cancel) at most this far above the best ask,
+    # so a sudden jump can never fill it at a much worse price.
+    buy_slippage_bps: Decimal = Field(default=Decimal(30), ge=0, le=500)
+    # Runaway guard: at most this many BUY orders in 24 hours (sells are never blocked).
+    max_buys_per_day: int = Field(default=6, ge=1, le=100)
+    order_wait_seconds: float = Field(default=15, gt=0)
+    # Compare the bot's books with the real account this often; a mismatch stops the bot.
+    reconcile_every_seconds: float = Field(default=60, ge=10)
+
+
 def _symbols(v: object) -> list[Symbol]:
     if not isinstance(v, list):
         raise ValueError("pairs must be a list like [BTC/TRY, ETH/TRY]")
@@ -290,6 +317,7 @@ class Settings(_Strict):
     liquidity: LiquidityConfig
     status: StatusConfig
     paper: PaperConfig = PaperConfig()
+    live: LiveConfig = LiveConfig()
     strategy: StrategyConfig = StrategyConfig()
     exits: ExitConfig = ExitConfig()
     backtest: BacktestConfig = BacktestConfig()
@@ -311,9 +339,16 @@ class Settings(_Strict):
     def _cross_checks(self) -> Settings:
         if self.trading_mode not in ALLOWED_MODES:
             raise ValueError(
-                f"trading_mode {self.trading_mode.value} is not allowed yet; "
-                "use READ_ONLY or PAPER_TRADING"
+                f"trading_mode {self.trading_mode.value} is not allowed; "
+                "use READ_ONLY, PAPER_TRADING or LIVE_TRADING"
             )
+        if self.trading_mode is TradingMode.LIVE_TRADING:
+            if self.market_type is not MarketType.SPOT or self.leverage != 1:
+                raise ValueError("LIVE_TRADING is spot only, leverage 1")
+            if not self.strategy.enabled:
+                raise ValueError("LIVE_TRADING needs strategy.enabled: true")
+            if self.paper.cash_currency not in ("USDT", self.risk_currency):
+                raise ValueError("LIVE_TRADING keeps idle money in USDT or in the risk currency (TRY)")
         if self.market_type is MarketType.SPOT and self.leverage != 1:
             raise ValueError("SPOT trading must use leverage 1")
         assets = set(self.supported_assets)
@@ -341,8 +376,29 @@ class Settings(_Strict):
         return self
 
 
-def load_settings(path: str | Path) -> Settings:
+def _merge(base: dict, extra: dict) -> dict:
+    out = dict(base)
+    for key, value in extra.items():
+        out[key] = _merge(out[key], value) if isinstance(value, dict) and isinstance(out.get(key), dict) else value
+    return out
+
+
+def load_settings(path: str | Path, overlay: str | Path | None = None) -> Settings:
+    """Load settings.yaml; `overlay` (e.g. config/canli.yaml) overrides only the keys it names."""
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError(f"{path} is empty or not a YAML mapping")
-    return Settings.model_validate(raw)
+    if overlay is not None:
+        extra = yaml.safe_load(Path(overlay).read_text(encoding="utf-8"))
+        if not isinstance(extra, dict):
+            raise ValueError(f"{overlay} is empty or not a YAML mapping")
+        raw = _merge(raw, extra)
+    settings = Settings.model_validate(raw)
+    if settings.trading_mode is TradingMode.LIVE_TRADING:
+        # Real-money runs write to their own files, apart from the practice ones.
+        live = settings.live
+        status = settings.status.model_copy(update={
+            "events_file": live.events_file, "risk_state_file": live.risk_state_file})
+        summary = settings.daily_summary.model_copy(update={"file": live.daily_summary_file})
+        settings = settings.model_copy(update={"status": status, "daily_summary": summary})
+    return settings

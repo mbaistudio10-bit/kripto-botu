@@ -13,14 +13,14 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import ROUND_DOWN, Decimal
+from decimal import Decimal
 
 from cryptobot.config import PaperConfig
 from cryptobot.domain.models import OrderBook, Symbol
 from cryptobot.events import EventLog, Level, emit_trade_closed, emit_trade_opened
 from cryptobot.fmt import fmt_num
 from cryptobot.market_data.service import MarketDataService
-from cryptobot.paper.portfolio import PaperPortfolio
+from cryptobot.paper.portfolio import PaperPortfolio, PaperPosition
 from cryptobot.risk.engine import HaltLevel, RiskEngine, TradeIntent
 
 log = logging.getLogger(__name__)
@@ -59,6 +59,9 @@ class Fill:
 
 
 class PaperTrader:
+    # LiveTrader (live/trader.py) overrides the hooks below to send real orders.
+    is_paper = True
+
     def __init__(
         self,
         portfolio: PaperPortfolio,
@@ -165,17 +168,37 @@ class PaperTrader:
         cap = equity * self._config.max_position_pct / 100 / price_try
         # Small buffer so slippage while walking the book never overdraws cash.
         cash_cap = cash * Decimal("0.98") / (t.ask * fee_mult)
-        qty = min(qty, cap, cash_cap).quantize(QTY_STEP, rounding=ROUND_DOWN)
+        qty = min(qty, cap, cash_cap)
+        step = self._quantity_step(symbol)
+        qty = (qty // step) * step
         if qty <= 0:
             return [f"{symbol}: yeterli nakit yok"]
+        problems = self._check_order_size(symbol, qty)
+        if problems:
+            return problems
         fill = self._fill(symbol, "buy", qty, now)
         if fill is None:
             return [f"{symbol}: fiyat verisi yok veya eski"]
         stop = fill.price * (1 - stop_pct / 100)
-        target = None if target_pct is None else fill.price * (1 + target_pct / 100)
         decision = self._engine.check_trade(TradeIntent(symbol, qty, fill.price, stop), now)
         if not decision.allowed:
             return decision.reasons
+        return self._enter(symbol, qty, fill, stop_pct, target_pct, note, now)
+
+    # -- hooks (paper versions; the live trader sends real orders instead) --
+
+    def _quantity_step(self, symbol: Symbol) -> Decimal:
+        return QTY_STEP
+
+    def _check_order_size(self, symbol: Symbol, quantity: Decimal) -> list[str]:
+        return []
+
+    def _enter(
+        self, symbol: Symbol, qty: Decimal, fill: Fill, stop_pct: Decimal, target_pct: Decimal | None,
+        note: str | None, now: datetime,
+    ) -> list[str]:
+        stop = fill.price * (1 - stop_pct / 100)
+        target = None if target_pct is None else fill.price * (1 + target_pct / 100)
         trade_id = self._pf.new_trade_id()
         try:
             self._pf.open_position(trade_id, symbol, qty, fill.price, fill.fee, stop, target, now)
@@ -184,19 +207,22 @@ class PaperTrader:
         value_try = self._pf.positions[symbol].cost_try
         emit_trade_opened(self._events, trade_id=trade_id, symbol=str(symbol), quantity=qty,
                           price=fill.price, value_try=value_try, stop_price=stop, target_price=target,
-                          note=note)
+                          paper=self.is_paper, note=note)
         return []
+
+    def _exit_fill(self, symbol: Symbol, pos: PaperPosition, now: datetime) -> Fill | None:
+        return self._fill(symbol, "sell", pos.quantity, now)
 
     def close(self, symbol: Symbol, reason: str, note: str | None, now: datetime) -> bool:
         pos = self._pf.positions.get(symbol)
         if pos is None:
             return False
-        fill = self._fill(symbol, "sell", pos.quantity, now)
+        fill = self._exit_fill(symbol, pos, now)
         if fill is None:
-            log.warning("cannot close paper %s now: no fresh price", symbol)
+            log.warning("cannot close %s now: no fresh price or order failed", symbol)
             return False
         done = self._pf.close_position(symbol, fill.price, fill.fee)
         emit_trade_closed(self._events, trade_id=done.trade_id, symbol=str(symbol),
                           quantity=done.quantity, price=done.exit_price, pnl_try=done.pnl_try,
-                          pnl_usd=done.pnl_usd, reason=reason, note=note)
+                          pnl_usd=done.pnl_usd, reason=reason, note=note, paper=self.is_paper)
         return True

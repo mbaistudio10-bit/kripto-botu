@@ -113,6 +113,7 @@ class PaperPortfolio:
         self.trades_closed = 0
         self.next_id = 1
         self.restored = False
+        self.paper = True  # False when this ledger mirrors a real exchange account
         if state_path is not None and state_path.exists():
             self._load(state_path)
             self.restored = True
@@ -278,7 +279,7 @@ class PaperPortfolio:
                 "opened_at": pos.opened_at.isoformat(timespec="seconds"),
             })
         return {
-            "paper": True,
+            "paper": self.paper,
             "equity_try": f"{equity:.2f}",
             "equity_usd": None if rate is None else f"{equity / rate.rate:.2f}",
             "cash_try": f"{self.cash_try():.2f}",

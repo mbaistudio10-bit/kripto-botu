@@ -63,6 +63,10 @@ TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 # Jarvis botun olaylarini kendi adresine almak isterse (istege bagli):
 JARVIS_WEBHOOK_URL=
+# Gercek para modu (OKX TR API anahtari). Cekim (withdraw) izni KAPALI olmali.
+OKX_API_KEY=
+OKX_API_SECRET=
+OKX_API_PASSPHRASE=
 """
 
 
