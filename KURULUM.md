@@ -319,7 +319,7 @@ ve küçük başlayın. Bot sizin yerinize alım-satım yapar; her işlem Telegr
 **CanliTest** dosyasına çift tıklayın. Önce `config/canli.yaml` içinde `confirmed: false` satırını `confirmed: true` yapın
 (gerçek parayla işlem yapmak istediğinizi bilerek onaylamanız için). Bot anahtarları ve izinleri kontrol eder,
 yaklaşık 30 TL'lik **gerçek** bir alış yapıp hemen satar ve komisyon dahil sonucu yazar (birkaç kuruş kayıp normaldir).
-Başlamadan önce sizden **EVET** yazmanızı ister. Bu test başarılı olmadan canlı moda geçmeyin.
+Başlamadan önce sizden **EVET** yazmanızı ister. Borsanın en küçük emir sınırı nedeniyle test yaklaşık 0,8 USDT (≈ 40 TL) tutarında alış yapar; bir önceki test yarım kaldıysa hesapta kalan küçük miktar da bu testte birlikte satılır. Bu test başarılı olmadan canlı moda geçmeyin.
 
 ### 10d. Canlı modu başlatma
 **CanliBaslat** dosyasına çift tıklayın. Pencerede "GERÇEK PARA MODU" yazar, Kontrol Merkezi'nde ve Telegram'da

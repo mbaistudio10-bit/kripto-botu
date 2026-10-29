@@ -323,3 +323,51 @@ def test_canli_overlay_switches_to_live_and_okx_tr_with_its_own_files() -> None:
     assert cfg.status.risk_state_file.name == "risk_state_live.json"
     # the normal file stays on practice money
     assert load_settings(ROOT / "config" / "settings.yaml").trading_mode.value == "PAPER_TRADING"
+
+
+def test_buy_too_close_to_the_exchange_minimum_is_refused(lrig: LiveRig) -> None:
+    # 0.00001 is the exchange minimum; the coin fee would leave 0.00000999, which cannot be sold.
+    assert "satılamaz" in lrig.trader._check_order_size(BTC, Decimal("0.00001"))[0]
+    assert lrig.trader._check_order_size(BTC, Decimal("0.0000101")) == []
+
+
+class _SelftestAdapter(FakeAdapter):
+    async def fetch_instruments(self, market_type):
+        return [Instrument(Symbol.parse(p), p.replace("/", "-"), market_type, Decimal("0.1"),
+                           Decimal("0.00000001"), Decimal("0.00001"), True) for p in self.prices]
+
+
+class _SelftestClient(FakeClient):
+    """Behaves like the real OKX TR did in the first live test: sells under the minimum size are refused."""
+
+    def key_permissions(self) -> set[str]:
+        return {"read_only", "trade"}
+
+    def place_order(self, inst_id, side, ord_type, size, price=None, client_id=None) -> str:
+        if size < Decimal("0.00001"):
+            raise ExchangeError("OKX error: Your order should meet or exceed the minimum order amount.")
+        return super().place_order(inst_id, side, ord_type, size, price, client_id)
+
+    def wait_order(self, inst_id, order_id, seconds) -> OrderResult:
+        o = self.orders[int(order_id) - 1]
+        if o["side"] == "buy":
+            return OrderResult(order_id, "filled", o["size"], self.price, o["size"] * Decimal("0.001"), "BTC")
+        return OrderResult(order_id, "filled", o["size"], self.price, o["size"] * self.price * Decimal("0.001"), "USDT")
+
+
+async def test_selftest_buys_above_the_minimum_so_it_can_sell_again_and_sweeps_old_dust(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _SelftestClient({"USDT": "7"})
+    client.bal["BTC"] = Balance(Decimal("0.00000999"), Decimal("0.00000999"))  # left by the first failed test
+    client.price = Decimal(79596)
+    monkeypatch.setattr(live_setup, "make_client", lambda s: client)
+    cfg = _live_settings(settings, confirmed=True)
+    adapter = _SelftestAdapter({"BTC/USDT": "79596", "ETH/USDT": "2500", "BTC/TRY": "3900000",
+                                "ETH/TRY": "120000", "USDT/TRY": "49.6"})
+    code = await live_setup.run_selftest(adapter, cfg, Decimal(30), ask=lambda _: "EVET")
+    assert code == 0
+    buy, sell = client.orders
+    assert buy["size"] >= Decimal("0.00001") * Decimal("1.01")
+    # the sale includes the old dust: bought net of fee + 0.00000999
+    assert sell["side"] == "sell" and sell["size"] > buy["size"]
