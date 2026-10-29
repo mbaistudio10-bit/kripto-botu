@@ -116,7 +116,7 @@ If `JARVIS_WEBHOOK_URL` is set, events are POSTed as JSON with header
 `X-KriptoBotu-Signature: hex(HMAC-SHA256(JARVIS_READ_KEY, body))`. With `jarvis.webhook_events: summary`
 (default) only the `daily_summary` event is sent, retried with backoff for about 24 h; `all` sends every notified event.
 
-The daily summary (`daily_summary.at`, default 23:55 local) goes to Telegram, the webhook and
+The daily summary (`daily_summary.at`, default 22:00 local; covers the 24 hours up to then) goes to Telegram, the webhook and
 `data/daily_summaries.jsonl`; a summary missed while the bot was off is written at the next start.
 The bot never depends on Jarvis being up.
 

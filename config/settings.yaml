@@ -205,7 +205,7 @@ jarvis:
 # If the bot was off at that time, yesterday's summary is written at the next start.
 daily_summary:
   enabled: true
-  at: "23:55"       # Turkey time (keep the quotes)
+  at: "22:00"       # Turkey time (keep the quotes)
   file: data/daily_summaries.jsonl
 
 # Windows: do not let the computer go to sleep while the bot runs

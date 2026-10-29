@@ -134,7 +134,7 @@ class DailySummaryConfig(_Strict):
     """One end-of-day summary for Telegram and Jarvis."""
 
     enabled: bool = True
-    at: dt_time = dt_time(23, 55)  # local time (risk.reset_utc_offset_hours)
+    at: dt_time = dt_time(22, 0)  # local time (risk.reset_utc_offset_hours)
     file: Path = Path("data/daily_summaries.jsonl")
 
 
