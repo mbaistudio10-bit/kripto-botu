@@ -31,6 +31,8 @@ class RiskState:
     guard_base: Decimal | None = None  # starting capital in TRY for the capital floor
     guard_peak: Decimal | None = None  # best equity since guard_base was set
     floor_halt: bool = False
+    loss_streak: int = 0  # losing trades in a row
+    loss_pause_until: str | None = None  # ISO time; no new trades before it
 
     def to_json(self) -> dict[str, Any]:
         return {k: str(v) if isinstance(v, Decimal) else v for k, v in asdict(self).items()}
@@ -49,6 +51,8 @@ class RiskState:
         state.weekly_halt_week = raw.get("weekly_halt_week")
         state.drawdown_halt = bool(raw.get("drawdown_halt", False))
         state.floor_halt = bool(raw.get("floor_halt", False))
+        state.loss_streak = int(raw.get("loss_streak", 0))
+        state.loss_pause_until = raw.get("loss_pause_until")
         state.delist_halts = list(raw.get("delist_halts", []))
         state.approved_limits = raw.get("approved_limits")
         return state

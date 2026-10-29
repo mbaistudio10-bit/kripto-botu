@@ -108,15 +108,19 @@ Bot sadece **sizin** Telegram hesabınızdan gelen komutlara cevap verir. Başka
 | Kur 5 dakikadan eski | Yeni işlem açılmaz. |
 | Likidite yetersiz | Alış-satış farkı geniş, hacim düşük veya emir defteri sığ olan çiftte işlem açılmaz. |
 | Satıcılar baskın | Emir defterinde satış tarafı alış tarafından çok ağırsa alış yapılmaz. |
+| Üst üste 3 zarar | 24 saat yeni işlem açılmaz (piyasa stratejiye uymuyorsa zorlamaz). Kendiliğinden açılır. |
+| Tek pozisyon en fazla %30 | Ani bir çöküşte zarar sınırlı kalır. |
 
 ### Ana para koruması (en önemli kural)
 
 Bot, yatırdığınız parayı korumak için bir **taban** tutar:
 - Başlangıçta taban, başlangıç parasının **%2 altıdır** (10.000 TL ile başlarsanız 9.800 TL).
-- Bot kâr ettikçe taban yükselir: kazancın **yarısı kilitlenir**. Örneğin bakiye 11.000 TL'ye çıkarsa taban 10.300 TL olur,
-  yani artık zarar etse bile başlangıç parasının **üstünde** kalmaya çalışır.
-- Bot her alışta miktarı öyle seçer ki, açık işlemlerin hepsi aynı anda zarar-kese (stop) gelse bile bakiye tabanın üstünde kalsın.
-  Tabana yaklaştıkça alışlar küçülür.
+- Bot kâr ettikçe taban yükselir: **kesinleşen** kazancın **yarısı kilitlenir**. Örneğin kâr edip bakiye 11.000 TL'ye çıkarsa
+  taban 10.300 TL olur, yani artık zarar etse bile başlangıç parasının **üstünde** kalmaya çalışır.
+  "Kesinleşen" = satılmış işlemler ya da stop'u alış fiyatının üstüne çekilmiş işlemler. Henüz kâğıt üstündeki kâr tabanı
+  yükseltmez; böylece normal bir fiyat geri çekilmesi botu boş yere durdurmaz.
+- Bot her alışta miktarı öyle seçer ki, açık işlemlerin hepsi aynı anda zarar-kese (stop) gelse ve fiyat stop'un
+  %0,5 altından satılsa bile bakiye tabanın üstünde kalsın. Tabana yaklaştıkça alışlar küçülür.
 - Bakiye tabana değerse bot **her şeyi satar ve durur**. Tekrar başlatmak için `/devam ONAY` yazmanız gerekir;
   o zaman taban yeni bakiyeye göre yeniden hesaplanır.
 

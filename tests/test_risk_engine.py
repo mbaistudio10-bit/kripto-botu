@@ -318,11 +318,12 @@ def test_falling_to_the_floor_closes_everything_until_owner_confirms(guarded: Ri
 
 
 def test_trade_size_keeps_every_open_trade_above_the_floor(guarded: Rig) -> None:
-    # 9,850 TL: 50 TL above the floor, shared by the 2 free slots -> 25 TL risk per trade.
+    # 9,850 TL: 50 TL above the floor, shared by the 2 free slots -> 25 TL risk per trade,
+    # counting costs (0.2%) and a possible gap past the stop (0.5%).
     guarded.portfolio.value = Decimal("9850")
     guarded.engine.evaluate(T0)
     qty = guarded.engine.max_quantity(BTC, Decimal("3500000"), Decimal("3400000"))
-    per_unit = Decimal("3500000") - Decimal("3400000") + Decimal("3500000") * 20 / 10_000
+    per_unit = Decimal("3500000") - Decimal("3400000") + Decimal("3500000") * 70 / 10_000
     assert qty * per_unit == pytest.approx(Decimal(25))
     big = guarded.engine.check_trade(TradeIntent(BTC, Decimal("0.001"), Decimal("3500000"), Decimal("3400000")), T0)
     assert not big.allowed and any("Ana para koruması" in r for r in big.reasons)
@@ -336,3 +337,25 @@ def test_no_buy_while_sellers_dominate_the_book(rig: Rig) -> None:
                                    exchange_ts=T0, received_ts=T0)
     decision = rig.engine.check_trade(good_intent(), T0)
     assert any("satıcılar baskın" in r for r in decision.reasons)
+
+
+def test_three_losses_in_a_row_pause_new_trades_for_a_day(settings: Settings, tmp_path: Path) -> None:
+    r = Rig(settings, tmp_path, guard=True)
+    feed(r.md, T0)
+    r.engine.evaluate(T0)
+    for pnl in ("-10", "-10", "+5", "-10", "-10"):  # a win resets the count
+        r.events.emit(Level.BILGI, "trade_closed", "x", pnl_try=Decimal(pnl))
+    assert r.engine.halt_level is HaltLevel.NORMAL
+    r.events.emit(Level.UYARI, "stop_loss_hit", "x", pnl_try=Decimal("-10"))
+    assert "loss_streak_pause" in r.kinds()
+    assert r.engine.halt_level is HaltLevel.NO_NEW_POSITIONS
+    assert "elle kaldırılamaz" in r.engine.resume()
+    assert r.engine.halt_level is HaltLevel.NO_NEW_POSITIONS
+    # Survives a restart, ends by itself after 24 hours.
+    r.engine = r.new_engine()
+    assert any(h.kind == "streak" for h in r.engine.halts())
+    later = datetime.now(timezone.utc) + timedelta(hours=25)
+    feed(r.md, later)
+    r.engine.evaluate(later)
+    assert not any(h.kind == "streak" for h in r.engine.halts())
+    assert "loss_pause_over" in r.kinds()

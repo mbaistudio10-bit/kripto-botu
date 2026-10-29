@@ -56,7 +56,10 @@ risk:
 capital_guard:
   enabled: true
   max_loss_from_start_pct: 2   # floor = starting capital - 2%
-  lock_profit_pct: 50          # floor rises by half of the best profit
+  lock_profit_pct: 50          # floor rises by half of the profit already booked or locked by stops
+  gap_allowance_bps: 50        # sizing assumes a stop may fill 0.5% worse (sudden drops)
+  pause_after_losses: 3        # 3 losing trades in a row ->
+  pause_hours: 24              # ... no new trade for 24 hours
 
 # --- Exchange --------------------------------------------------------
 exchange:
@@ -103,7 +106,7 @@ liquidity:
 paper:
   state_file: data/paper_state.json  # balances and open positions survive a restart
   fee_bps: 10              # fee per buy and per sell (10 = 0.10%)
-  max_position_pct: 45     # one position uses at most 45% of the account
+  max_position_pct: 30     # one position uses at most 30% of the account (limits damage from a crash)
   check_every_seconds: 2   # how often stop-loss / target are checked
   # Idle money is kept in dollars (USDT): in the backtest (October 2026) TL
   # lost value against the dollar, and the dollar pairs did better.

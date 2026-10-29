@@ -113,7 +113,9 @@ async def run_backtest(settings: Settings, adapter: ExchangeAdapter, days: int |
     g = settings.capital_guard
     if g.enabled:
         header.append(f"Ana para koruması: taban başlangıcın %{_tr(float(g.max_loss_from_start_pct))} altı, "
-                      f"kârın %{_tr(float(g.lock_profit_pct))}'si kilitlenir; tabana inilirse acil durdurma")
+                      f"kârın %{_tr(float(g.lock_profit_pct))}'si kilitlenir; tabana inilirse acil durdurma"
+                      + (f"; üst üste {g.pause_after_losses} zararda {g.pause_hours} saat mola"
+                         if g.pause_after_losses else ""))
     if "USDT" in by_quote:
         header.append("Dolar çiftlerinde aynı TL tutarı başta USDT'ye çevrilir; boştaki para dolar olarak "
                       "durur. Sonuç yine TL ve USD olarak gösterilir.")

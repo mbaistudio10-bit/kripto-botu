@@ -99,6 +99,11 @@ class CapitalGuardConfig(_Strict):
     max_loss_from_start_pct: Decimal = Field(default=Decimal(2), gt=0, le=10)
     # The floor rises by this share of the best profit so far (50 = keep half).
     lock_profit_pct: Decimal = Field(default=Decimal(50), ge=0, le=90)
+    # Sizing assumes each stop may fill this much worse (a sudden drop jumps past it).
+    gap_allowance_bps: Decimal = Field(default=Decimal(50), ge=0, le=1000)
+    # After this many losing trades in a row, no new trade for `pause_hours` (0 = off).
+    pause_after_losses: int = Field(default=3, ge=0, le=20)
+    pause_hours: int = Field(default=24, ge=1, le=24 * 14)
 
 
 class TelegramConfig(_Strict):
@@ -151,7 +156,7 @@ class PaperConfig(_Strict):
     # Exchange fee charged on every simulated buy and sell (10 = 0.10%, OKX spot taker).
     fee_bps: Decimal = Field(default=Decimal(10), ge=0)
     # One position may use at most this share of the account value.
-    max_position_pct: Decimal = Field(default=Decimal(45), gt=0, le=100)
+    max_position_pct: Decimal = Field(default=Decimal(30), gt=0, le=100)
     # How often open positions are checked against their stop and target.
     check_every_seconds: float = Field(default=2, gt=0)
     # Idle money is kept in this currency. Money in any other currency (the

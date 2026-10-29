@@ -232,3 +232,44 @@ def test_dollar_pair_is_bought_with_dollars(rig: Rig) -> None:
     assert pf.balances["USDT"] == pytest.approx(Decimal(10000) / 35 * Decimal("0.999") - pos.cost)
     opened = [e for e in rig.seen if e.kind == TRADE_OPENED][-1]
     assert "USDT\n" in opened.message and "TL" in opened.message
+
+
+def test_two_open_trades_stopping_out_together_stay_above_the_floor(rig: Rig) -> None:
+    # Push the account near the floor so the capital guard, not the 1% rule, sizes the trades.
+    rig.portfolio.balances["TRY"] = Decimal("9880")
+    rig.engine.evaluate(rig.now)
+    floor = rig.engine.capital_floor()
+    assert floor == Decimal("9800")
+    assert rig.trader.open(BTC, Decimal(3), None, rig.now) == []
+    assert rig.trader.open(ETH, Decimal(3), None, rig.now) == []
+    # The second trade must count the risk the first one already carries.
+    worst = rig.portfolio.equity() - rig.portfolio.open_risk(Decimal(70))
+    assert worst >= floor * Decimal("0.9999")
+    # Both stop out at once, 0.5% past their stops: the account still ends above the floor.
+    for sym in (BTC, ETH):
+        pos = rig.portfolio.positions[sym]
+        set_price(rig.md, sym, str(pos.stop_price * Decimal("0.995")), rig.now)
+    rig.trader.step(rig.now)
+    assert not rig.portfolio.positions
+    assert rig.portfolio.equity() >= floor * Decimal("0.999")
+
+
+def test_paper_profit_does_not_raise_the_floor_until_it_is_locked(rig: Rig) -> None:
+    rig.buy()
+    pos = rig.portfolio.positions[BTC]
+    set_price(rig.md, BTC, "3850000", rig.now)  # +10% on paper
+    rig.engine.evaluate(rig.now)
+    assert rig.engine.capital_floor() == Decimal("9800")  # a pullback must not stop the bot
+    pos.stop_price = pos.entry_price * Decimal("1.05")  # trailing stop locks +5%
+    rig.engine.evaluate(rig.now)
+    locked = rig.portfolio.booked_equity() - Decimal(10000)
+    assert locked > 0
+    assert rig.engine.capital_floor() == pytest.approx(Decimal("9800") + locked / 2)
+
+
+def test_emergency_close_names_the_capital_floor(rig: Rig) -> None:
+    rig.buy()
+    rig.engine._state.floor_halt = True
+    rig.trader.step(rig.now)
+    closed = [e for e in rig.seen if e.kind == TRADE_CLOSED][0]
+    assert "Ana para koruması" in closed.message

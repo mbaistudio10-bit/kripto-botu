@@ -55,8 +55,11 @@ keeps Windows from sleeping while it runs. `packaging/ArkaPlanda-Calistir.bat` /
 
 ## Capital guard
 `capital_guard` keeps equity above a floor: `base × (1 − max_loss_from_start_pct) + lock_profit_pct × max(0, peak − base)`
-(defaults 2% and 50%). New positions are sized so that all open stops together cannot take equity below the floor
-(budget split over the free position slots). Touching the floor raises a CLOSE_ALL `floor` halt; `/devam ONAY`
+(defaults 2% and 50%). `peak` is the best *booked* equity: cash plus each position at max(cost, value at its stop),
+so only taken or stop-locked profit lifts the floor. New positions are sized so that all open trades stopping out
+together, `gap_allowance_bps` (50) plus the round-trip cost past their stops, cannot take equity below the floor:
+`(equity − open risk − floor) / free slots`. After `pause_after_losses` (3) losing trades in a row, no new entries for
+`pause_hours` (24); this pause clears only with time. The backtester applies the same rules. Touching the floor raises a CLOSE_ALL `floor` halt; `/devam ONAY`
 lifts it and rebuilds the base from current equity. The backtester applies the same rule. Fees and gaps can still
 push equity slightly below the floor; this limits losses, it cannot rule them out.
 Entries also need order-book imbalance within the depth band ≥ `liquidity.min_book_imbalance` (default −0.3).

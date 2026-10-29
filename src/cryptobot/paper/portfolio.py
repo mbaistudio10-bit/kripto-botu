@@ -150,6 +150,23 @@ class PaperPortfolio:
     def unrealized_try(self, pos: PaperPosition) -> Decimal:
         return self.position_value(pos) - pos.cost_try
 
+    def _stop_value(self, pos: PaperPosition, worse_bps: Decimal = Decimal(0)) -> Decimal:
+        """TRY value if the position were sold at its stop, `worse_bps` below it."""
+        amount = pos.quantity * pos.stop_price * (1 - worse_bps / 10_000)
+        value = self.to_risk(amount, pos.symbol.quote)
+        return value if value is not None else pos.cost_try * amount / (pos.quantity * pos.entry_price)
+
+    def open_risk(self, worse_bps: Decimal) -> Decimal:
+        """How much equity would fall if every open position stopped out now, `worse_bps` past its stop."""
+        return sum((max(Decimal(0), self.position_value(p) - self._stop_value(p, worse_bps))
+                    for p in self.positions.values()), Decimal(0))
+
+    def booked_equity(self) -> Decimal:
+        """Cash plus each position at what it cost or at its stop, whichever is higher:
+        profit already taken or locked in by a raised stop, without the paper profit on top."""
+        return self.cash_try() + sum((max(p.cost_try, self._stop_value(p)) for p in self.positions.values()),
+                                     Decimal(0))
+
     def cash_try(self) -> Decimal:
         total = Decimal(0)
         for ccy, amount in self.balances.items():

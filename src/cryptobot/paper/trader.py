@@ -21,7 +21,7 @@ from cryptobot.events import EventLog, Level, emit_trade_closed, emit_trade_open
 from cryptobot.fmt import fmt_num
 from cryptobot.market_data.service import MarketDataService
 from cryptobot.paper.portfolio import PaperPortfolio
-from cryptobot.risk.engine import RiskEngine, TradeIntent
+from cryptobot.risk.engine import HaltLevel, RiskEngine, TradeIntent
 
 log = logging.getLogger(__name__)
 
@@ -111,8 +111,9 @@ class PaperTrader:
     def step(self, now: datetime | None = None) -> None:
         now = now or datetime.now(timezone.utc)
         if self._engine.positions_must_close:
+            why = "; ".join(h.message for h in self._engine.halts() if h.level is HaltLevel.CLOSE_ALL)
             for symbol in list(self._pf.positions):
-                self.close(symbol, "acil kapatma", "acil durdurma (zirveden düşüş limiti)", now)
+                self.close(symbol, "acil kapatma", why or "acil durdurma", now)
             return
         self._manage_exits(now)
         self._convert_idle_cash()

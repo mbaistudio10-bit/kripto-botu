@@ -19,6 +19,8 @@ Realism rules:
   * The capital floor (capital_guard) works as live: trade sizes keep every open
     trade above it, and touching it is an emergency stop like the drawdown one.
     The floor is kept in the account's own money (USDT for a dollar account).
+    Like live, only booked or stop-locked profit lifts the floor, sizing counts the
+    risk already open plus a gap allowance, and a losing streak pauses entries.
 """
 
 from __future__ import annotations
@@ -133,6 +135,11 @@ class Backtester:
         daily_halt = weekly_halt = dd_halt = False
         dd_resume_at: datetime | None = None
         g_base = g_peak = capital
+        losers_in_row = 0
+        pause_until: datetime | None = None
+        floor_cost = 0.0
+        if self.guard is not None:
+            floor_cost = float(lim.assumed_round_trip_cost_bps + self.guard.gap_allowance_bps) / 10_000
 
         def floor() -> float | None:
             if self.guard is None:
@@ -145,13 +152,27 @@ class Backtester:
         def equity() -> float:
             return cash + sum(p.quantity * last_close[s] for s, p in positions.items())
 
+        def booked() -> float:  # taken profit, or locked in by a raised stop; as live
+            return cash + sum(max(p.cost, p.quantity * p.exit.stop) for p in positions.values())
+
+        def open_risk() -> float:  # fall if every open trade stopped out now, past its stop
+            return sum(max(0.0, p.quantity * (last_close[s] - p.exit.stop * (1 - floor_cost)))
+                       for s, p in positions.items())
+
         def close(sym: Symbol, price: float, ts: datetime, reason: str, note: str) -> None:
-            nonlocal cash
+            nonlocal cash, losers_in_row, pause_until
             pos = positions.pop(sym)
             fee = pos.quantity * price * self.fee
             proceeds = pos.quantity * price - fee
             cash += proceeds
             pnl = proceeds - pos.cost
+            if self.guard is not None and self.guard.pause_after_losses > 0:
+                losers_in_row = losers_in_row + 1 if pnl < 0 else 0
+                if losers_in_row >= self.guard.pause_after_losses:
+                    losers_in_row = 0
+                    pause_until = ts + timedelta(hours=self.guard.pause_hours)
+                    res.halts.append(f"{ts + offset:%d.%m.%Y}: üst üste {self.guard.pause_after_losses} "
+                                     f"zararlı işlem, {self.guard.pause_hours} saat mola")
             res.trades.append(BtTrade(sym, pos.entry_ts, ts, pos.entry_price, price, pos.quantity, pnl,
                                       pos.fees + fee, pnl / pos.risk_money if pos.risk_money else 0.0,
                                       reason, note))
@@ -159,7 +180,8 @@ class Backtester:
         def enter(sym: Symbol, sig: Signal, c: Candle) -> None:
             nonlocal cash
             assert sig.expected_entry is not None and sig.invalidation_price is not None
-            if daily_halt or weekly_halt or dd_halt or len(positions) >= lim.max_concurrent_positions:
+            paused = pause_until is not None and c.ts < pause_until
+            if daily_halt or weekly_halt or dd_halt or paused or len(positions) >= lim.max_concurrent_positions:
                 res.skipped += 1
                 return
             price = c.open * (1 + self.slip)
@@ -170,11 +192,13 @@ class Backtester:
             eq = equity()
             per_unit = price - stop + price * float(lim.assumed_round_trip_cost_bps) / 10_000
             budget = eq * float(lim.max_risk_per_trade_pct) / 100
+            qty_floor = float("inf")
             fl = floor()
             if fl is not None:  # all open trades stopping out together must stay above the floor
                 free = max(1, lim.max_concurrent_positions - len(positions))
-                budget = min(budget, max(0.0, eq - fl) / free)
-            qty = min(budget / per_unit,
+                room = max(0.0, eq - open_risk() - fl) / free
+                qty_floor = room / (price - stop + price * floor_cost)
+            qty = min(budget / per_unit, qty_floor,
                       eq * self.max_pos_frac / price,
                       cash * 0.98 / (price * (1 + self.fee)))
             if qty * price < min_order:
@@ -216,7 +240,7 @@ class Backtester:
             if wk != week_key:
                 week_key, week_start, weekly_halt = wk, eq, False
             peak = max(peak, eq)
-            g_peak = max(g_peak, eq)
+            g_peak = max(g_peak, booked())
             if not daily_halt and (day_start - eq) / day_start * 100 >= float(lim.max_daily_loss_pct):
                 daily_halt = True
                 res.halts.append(f"{local:%d.%m.%Y}: günlük zarar limiti doldu")
