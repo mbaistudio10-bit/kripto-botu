@@ -27,12 +27,14 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements.txt pyinstaller
       - run: python -m pytest -q
-      - run: pyinstaller --onefile --name KriptoBotu --paths src --collect-submodules cryptobot run_bot.py
+      # A folder build (not --onefile): one-file programs unpack themselves at every start,
+      # which antivirus programs often mistake for malware.
+      - run: pyinstaller --onedir --noconfirm --name KriptoBotu --paths src --collect-submodules cryptobot run_bot.py
       - name: Package
         shell: bash
         run: |
           mkdir -p out/KriptoBotu/config
-          cp dist/KriptoBotu* out/KriptoBotu/
+          cp -R dist/KriptoBotu/. out/KriptoBotu/
           cp config/settings.yaml out/KriptoBotu/config/
           cp KURULUM.md out/KriptoBotu/
           if [ "$RUNNER_OS" = "Windows" ]; then
