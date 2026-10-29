@@ -14,7 +14,10 @@ def test_default_settings_match_user_spec(settings: Settings) -> None:
     assert settings.trading_mode is TradingMode.PAPER_TRADING
     assert settings.market_type is MarketType.SPOT
     assert settings.leverage == 1
-    assert settings.pairs == [Symbol("BTC", "TRY"), Symbol("ETH", "TRY"), Symbol("USDT", "TRY")]
+    assert settings.pairs == [Symbol("BTC", "USDT"), Symbol("ETH", "USDT"),
+                              Symbol("BTC", "TRY"), Symbol("ETH", "TRY"), Symbol("USDT", "TRY")]
+    assert settings.strategy.pairs == [Symbol("BTC", "USDT"), Symbol("ETH", "USDT")]
+    assert settings.paper.cash_currency == "USDT"
     assert settings.risk.max_concurrent_positions == 2
     assert settings.risk.max_daily_loss_pct == Decimal(3)
     assert settings.risk.max_weekly_loss_pct == Decimal(6)
@@ -86,7 +89,7 @@ def test_old_settings_with_test_trigger_still_load() -> None:
     raw.pop("strategy"), raw.pop("exits"), raw.pop("backtest")
     raw["test_trigger"] = {"enabled": True, "pairs": ["BTC/TRY"], "every_minutes": 30}
     s = Settings.model_validate(raw)
-    assert s.strategy.enabled and [str(p) for p in s.strategy.pairs] == ["BTC/TRY", "ETH/TRY"]
+    assert s.strategy.enabled and [str(p) for p in s.strategy.pairs] == ["BTC/USDT", "ETH/USDT"]
 
 
 def test_strategy_pairs_must_be_configured_pairs() -> None:

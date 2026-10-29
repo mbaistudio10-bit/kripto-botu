@@ -5,11 +5,16 @@ Jarvis -> bot: a small HTTP API on this computer (default 127.0.0.1:8765).
     GET  /api/v1/health   /api/v1/status   /api/v1/limits
     GET  /api/v1/events?since=<ISO time>&limit=100
     GET  /api/v1/report?period=gün|hafta|ay      (summary for the "X report")
+    GET  /api/v1/overview   everything in one call: status, health score, reports,
+                            limits, recent events, last backtest (same as the panel)
+    GET  /api/v1/daily-summary?date=YYYY-MM-DD   end-of-day summary (default: latest)
   Control key only (JARVIS_CONTROL_KEY):
     POST /api/v1/control/stop    {"reason": "..."}   emergency: no new positions
     POST /api/v1/control/resume                      lifts only a stop Jarvis made
-Bot -> Jarvis: if JARVIS_WEBHOOK_URL is set, every notified event is POSTed there
-  as JSON, signed with HMAC-SHA256 (header X-KriptoBotu-Signature, key = read key).
+Bot -> Jarvis: if JARVIS_WEBHOOK_URL is set, the end-of-day summary (or, with
+  jarvis.webhook_events: all, every notified event) is POSTed there as JSON, signed with
+  HMAC-SHA256 (header X-KriptoBotu-Signature, key = read key). A summary is retried until
+  Jarvis answers, so it arrives even if Jarvis was off. The bot never waits for Jarvis.
 
 Jarvis can never place orders, change limits, or lift a loss-limit / drawdown halt.
 Every control call is written to the event log and echoed to Telegram.
@@ -30,6 +35,7 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
+from cryptobot.daily import DAILY_SUMMARY, SummaryStore
 from cryptobot.events import Event, EventLog
 from cryptobot.report import build_report, period_start
 from cryptobot.risk.engine import RiskEngine
@@ -54,7 +60,11 @@ class JarvisApi:
         read_key: str,
         control_key: str | None,
         utc_offset_hours: int = 3,
+        overview: Callable[[], dict[str, Any]] | None = None,
+        summaries: SummaryStore | None = None,
     ) -> None:
+        self._overview = overview
+        self._summaries = summaries
         if len(read_key) < MIN_KEY_LENGTH or (control_key is not None and len(control_key) < MIN_KEY_LENGTH):
             raise ValueError("Jarvis keys must be at least 16 characters")
         if control_key is not None and hmac.compare_digest(read_key, control_key):
@@ -95,6 +105,8 @@ class JarvisApi:
             web.get(f"{API_PREFIX}/limits", self.limits),
             web.get(f"{API_PREFIX}/events", self.events),
             web.get(f"{API_PREFIX}/report", self.report),
+            web.get(f"{API_PREFIX}/overview", self.overview),
+            web.get(f"{API_PREFIX}/daily-summary", self.daily_summary),
             web.post(f"{API_PREFIX}/control/stop", self.stop),
             web.post(f"{API_PREFIX}/control/resume", self.resume),
         ])
@@ -124,6 +136,17 @@ class JarvisApi:
             return _json({"error": "bad since/limit"}, 400)
         found = list(self._events.read_since(since))[-limit:]
         return _json({"events": [e.to_json() for e in found]})
+
+    async def overview(self, request: web.Request) -> web.Response:
+        if self._overview is None:
+            return _json({"error": "overview not available"}, 404)
+        return _json(self._overview())
+
+    async def daily_summary(self, request: web.Request) -> web.Response:
+        found = self._summaries.get(request.query.get("date")) if self._summaries else None
+        if found is None:
+            return _json({"error": "no summary yet"}, 404)
+        return _json(found)
 
     async def report(self, request: web.Request) -> web.Response:
         period = request.query.get("period", "gün")
@@ -159,13 +182,17 @@ class JarvisApi:
 class JarvisWebhook:
     """Pushes notified events to Jarvis (bot -> Jarvis direction)."""
 
-    def __init__(self, url: str, secret: str, session: aiohttp.ClientSession) -> None:
+    def __init__(self, url: str, secret: str, session: aiohttp.ClientSession,
+                 summary_only: bool = True) -> None:
+        self._summary_only = summary_only
         self._url = url
         self._secret = secret.encode()
         self._session = session
         self._queue: asyncio.Queue[Event] = asyncio.Queue(maxsize=500)
 
     def on_event(self, event: Event) -> None:
+        if self._summary_only and event.kind != DAILY_SUMMARY:
+            return
         if event.should_notify:
             with contextlib.suppress(asyncio.QueueFull):
                 self._queue.put_nowait(event)
@@ -173,12 +200,14 @@ class JarvisWebhook:
     def sign(self, body: bytes) -> str:
         return hmac.new(self._secret, body, hashlib.sha256).hexdigest()
 
-    async def run(self) -> None:
+    async def run(self, max_wait: float = 1800) -> None:
         while True:
             event = await self._queue.get()
             body = json.dumps(event.to_json(), ensure_ascii=False, default=str).encode()
             headers = {"Content-Type": "application/json", "X-KriptoBotu-Signature": self.sign(body)}
-            for attempt in range(3):
+            # A summary waits for Jarvis (up to a day); other events get 3 quick tries.
+            tries = 60 if event.kind == DAILY_SUMMARY else 3
+            for attempt in range(tries):
                 try:
                     async with self._session.post(
                         self._url, data=body, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
@@ -187,7 +216,7 @@ class JarvisWebhook:
                             break
                 except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                     log.warning("jarvis webhook failed (try %d): %s", attempt + 1, exc)
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(min(2 ** attempt, max_wait))
 
 
 async def start_api(api: JarvisApi, host: str, port: int) -> web.AppRunner:

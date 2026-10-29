@@ -281,7 +281,7 @@ async def test_jarvis_webhook_is_signed(rig: Rig) -> None:
     server = TestServer(app)
     await server.start_server()
     async with aiohttp.ClientSession() as session:
-        wh = JarvisWebhook(str(server.make_url("/hook")), READ_KEY, session)
+        wh = JarvisWebhook(str(server.make_url("/hook")), READ_KEY, session, summary_only=False)
         rig.events.subscribe(wh.on_event)
         rig.events.emit(Level.KRITIK, "drawdown_halt", "acil")
         task = asyncio.create_task(wh.run())

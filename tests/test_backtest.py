@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -68,7 +69,8 @@ def test_entry_fills_at_next_open_with_costs_and_risk_sizing(settings: Settings)
     assert t.entry_price == pytest.approx(candles[6].open * 1.001)
     # Risk at the stop (incl. assumed 0.2% costs) is 1% of the account.
     p = t.entry_price
-    expected = min(100 / (2.0 + p * 0.002), 10_000 * 0.45 / p, 10_000 * 0.98 / (p * 1.001))
+    cap = float(settings.paper.max_position_pct) / 100
+    expected = min(100 / (2.0 + p * 0.002), 10_000 * cap / p, 10_000 * 0.98 / (p * 1.001))
     assert t.quantity == pytest.approx(expected)
     assert t.fees == pytest.approx(t.quantity * (t.entry_price + t.exit_price) * 0.001)
     # Flat market: the trade loses about fees + slippage.
@@ -118,15 +120,29 @@ def test_after_drawdown_halt_trading_resumes_after_pause(settings: Settings) -> 
     closes = [100.0 * 0.995**i for i in range(24 * 8)] + [100.0 * 0.995 ** (24 * 8)] * (n - 24 * 8)
     candles = from_closes(closes, spread=0.0)
     strat = StubStrategy(set(range(1, n, 6)), stop_dist=0.3)
-    res = Backtester(strat, settings.exits, settings.risk, settings.paper, 10, 10_000.0,
+    big = settings.paper.model_copy(update={"max_position_pct": Decimal(45)})
+    res = Backtester(strat, settings.exits, settings.risk, big, 10, 10_000.0,
                      drawdown_pause_days=7).run({BTC: candles}, T0, T0 + n * H)
     assert res.drawdown_halts >= 1
     halt_at = next(i for i, h in enumerate(res.halts) if "ACİL" in h)
     assert any("devam edildi" in h for h in res.halts[halt_at:])
     assert max(t.entry_ts for t in res.trades) > T0 + timedelta(days=15)
-    stopped = Backtester(strat, settings.exits, settings.risk, settings.paper, 10, 10_000.0,
+    stopped = Backtester(strat, settings.exits, settings.risk, big, 10, 10_000.0,
                          drawdown_pause_days=0).run({BTC: candles}, T0, T0 + n * H)
     assert len(stopped.trades) < len(res.trades)
+
+
+def test_capital_floor_stops_losses_near_the_start(settings: Settings) -> None:
+    # Steady losers: the guard shrinks each trade so the account settles just above the floor.
+    n = 24 * 6
+    candles = from_closes([100.0 * 0.995**i for i in range(n)], spread=0.0)
+    strat = StubStrategy(set(range(1, n, 6)), stop_dist=0.3)
+    guarded = Backtester(strat, settings.exits, settings.risk, settings.paper, 10, 10_000.0,
+                         drawdown_pause_days=0, guard=settings.capital_guard).run({BTC: candles}, T0, T0 + n * H)
+    assert guarded.end_equity >= 10_000.0 * 0.98 * 0.999  # floor = start - 2%
+    plain = Backtester(strat, settings.exits, settings.risk, settings.paper, 10, 10_000.0,
+                       drawdown_pause_days=0).run({BTC: candles}, T0, T0 + n * H)
+    assert plain.end_equity < guarded.end_equity
 
 
 def test_variants_are_fixed_and_start_with_current_settings(settings: Settings) -> None:
@@ -221,7 +237,10 @@ async def test_run_backtest_writes_report(settings: Settings, tmp_path) -> None:
     assert full.startswith("📈") and "AYRINTILAR" in full and "Dolar bazında" in full
     assert "kural karşılaştırması" in text and "şu anki ayarlar" in text
     assert "Günlük mum" in text and "4 saatlik mum" in text and "1 saatlik mum" in text
-    assert text.count("dolar çiftleri (BTC/USDT, ETH/USDT)") == 3  # every rule set, also in dollars
+    rows = [line for line in text.splitlines() if line[:2] in {f"{n})" for n in range(1, 10)}]
+    # The bot's dollar pairs first, then every rule set also on the TL pairs.
+    assert [r.endswith("dolar çiftleri (BTC/USDT, ETH/USDT)") for r in rows] == [True, False] * 3
+    assert all(r.endswith("TL çiftleri (BTC/TRY, ETH/TRY)") for r in rows[1::2])
     assert "Hesap dolar (USDT) olarak tutuldu" in full and "TL bazında" in full
     assert "sadece dolar (USDT) tutmak" in text and "garanti etmez" in text
     assert len(text) < 4000  # one Telegram message
@@ -280,3 +299,28 @@ def test_dollar_account_must_make_dollars_to_pass(settings: Settings) -> None:
 
     assert "Hiçbir kural" in comparison_verdict([(v, result(-0.05), result(-0.05))])
     assert "her iki dönemde" in comparison_verdict([(v, result(0.05), result(0.05))])
+
+
+def test_tl_account_must_beat_holding_dollars(settings: Settings) -> None:
+    from cryptobot.backtest.engine import BtResult, BtTrade
+    from cryptobot.backtest.variants import variants
+
+    v = variants(settings.strategy, settings.exits)[0]
+    # +10% in TL, but the dollar rose 20% against TL: holding USDT would have been better.
+    r = BtResult("x", T0, T0 + H, 10_000.0, 11_000.0, usd_start=250.0, usd_end=250.0 * 1.1 / 1.2)
+    r.trades = [BtTrade(BTC, T0, T0, 1, 1, 1, 1.0 if i % 3 else -0.5, 0, 0, "", "") for i in range(20)]
+    assert "Hiçbir kural" in comparison_verdict([(v, r, r)])
+
+
+def test_guard_counts_both_open_trades_and_pauses_after_losing_streak(settings: Settings) -> None:
+    # Two pairs fall together, a new loser every few bars: never below the floor, and a
+    # streak of losers pauses new entries.
+    n = 24 * 6
+    falling = from_closes([100.0 * 0.995**i for i in range(n)], spread=0.0)
+    strat = StubStrategy(set(range(1, n, 4)), stop_dist=2.0)
+    loose = settings.risk.model_copy(update={"max_risk_per_trade_pct": Decimal(5)})  # the floor decides size
+    res = Backtester(strat, settings.exits, loose, settings.paper, 10, 10_000.0,
+                     drawdown_pause_days=0, guard=settings.capital_guard).run({BTC: falling, ETH: falling},
+                                                                            T0, T0 + n * H)
+    assert min(eq for _, eq in res.equity_curve) >= 10_000.0 * 0.98 * 0.999
+    assert any("zararlı işlem" in h and "mola" in h for h in res.halts)

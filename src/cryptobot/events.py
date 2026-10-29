@@ -141,6 +141,12 @@ SYSTEM_ERROR = "system_error"
 INSTANT_KINDS = frozenset({TRADE_OPENED, TRADE_CLOSED, STOP_LOSS_HIT})
 
 
+def _unit(symbol: str) -> str:
+    """' USDT' for 'BTC/USDT': prices are in the pair's quote currency."""
+    quote = symbol.partition("/")[2]
+    return f" {'TL' if quote == 'TRY' else quote}" if quote else ""
+
+
 def emit_trade_opened(
     events: EventLog, *, trade_id: str, symbol: str, quantity: Decimal, price: Decimal,
     value_try: Decimal, stop_price: Decimal | None, target_price: Decimal | None = None,
@@ -152,7 +158,7 @@ def emit_trade_opened(
     target = f"\nHedef: {fmt_num(target_price)}" if target_price is not None else ""
     return events.emit(
         Level.BILGI, TRADE_OPENED,
-        f"🛒 ALIŞ{tag}: {symbol}\nMiktar: {quantity.normalize():f} @ {fmt_num(price)}\n"
+        f"🛒 ALIŞ{tag}: {symbol}\nMiktar: {quantity.normalize():f} @ {fmt_num(price)}{_unit(symbol)}\n"
         f"Tutar: {fmt_try(value_try)}{stop}{target}" + (f"\nSebep: {note}" if note else ""),
         notify=True, key=trade_id, trade_id=trade_id, symbol=symbol, side="BUY",
         quantity=quantity, price=price, value_try=value_try, stop_price=stop_price,
@@ -173,7 +179,7 @@ def emit_trade_closed(
     why = f"\nSebep: {note}" if note else ""
     return events.emit(
         Level.UYARI if stop else Level.BILGI, STOP_LOSS_HIT if stop else TRADE_CLOSED,
-        f"{head}\nMiktar: {quantity.normalize():f} @ {fmt_num(price)}\n"
+        f"{head}\nMiktar: {quantity.normalize():f} @ {fmt_num(price)}{_unit(symbol)}\n"
         f"Sonuç: {sign}{fmt_try(pnl_try)} (≈ {pnl_usd:+.2f} USD){why}",
         notify=True, key=trade_id, trade_id=trade_id, symbol=symbol, side="SELL",
         quantity=quantity, price=price, pnl_try=pnl_try, pnl_usd=pnl_usd, reason=reason,

@@ -19,12 +19,17 @@ primary_quote_currencies: [TRY, USDT]
 supported_assets: [TRY, USDT, USD, BTC, ETH]
 
 # --- Pairs -----------------------------------------------------------
+# The bot trades the dollar pairs. The TL pairs are only watched;
+# USDT/TRY also gives the dollar rate used to show everything in TL.
 pairs:
+  - BTC/USDT
+  - ETH/USDT
   - BTC/TRY
   - ETH/TRY
   - USDT/TRY
 
 # --- Paper account ---------------------------------------------------
+# The 10,000 TL is changed into dollars (USDT) at the start, see paper.cash_currency.
 starting_capital: 10000
 starting_capital_currency: TRY
 
@@ -40,6 +45,21 @@ risk:
   reset_utc_offset_hours: 3    # Turkey = UTC+3
   assumed_round_trip_cost_bps: 20  # fees + slippage added to each trade's risk
   warn_at_fraction: 0.7        # early warning at 70% of a loss limit
+
+# --- Capital guard (ana para koruması) ----------------------------------
+# The bot defends a floor just under the money put in: trade sizes are cut so
+# that even if every open trade hits its stop, the account stays above it.
+# If the account still touches the floor (e.g. a price gap), everything is sold
+# and the bot stops until you send "/devam ONAY". Every gain raises the floor:
+# half of the best profit so far is locked in. The floor cannot be exactly the
+# starting money, because every buy and sell pays a fee.
+capital_guard:
+  enabled: true
+  max_loss_from_start_pct: 2   # floor = starting capital - 2%
+  lock_profit_pct: 50          # floor rises by half of the profit already booked or locked by stops
+  gap_allowance_bps: 50        # sizing assumes a stop may fill 0.5% worse (sudden drops)
+  pause_after_losses: 3        # 3 losing trades in a row ->
+  pause_hours: 24              # ... no new trade for 24 hours
 
 # --- Exchange --------------------------------------------------------
 exchange:
@@ -76,6 +96,9 @@ liquidity:
   min_24h_volume_try: 5000000   # min traded value in the last 24 hours
   depth_band_bps: 50
   alert_after_seconds: 120      # warn only if a pair stays unfit this long
+  # No buy while sellers clearly outweigh buyers near the price
+  # (-1 = only sellers, 0 = balanced, +1 = only buyers).
+  min_book_imbalance: -0.3
 
 # --- Paper (practice) account ------------------------------------------
 # Fake money only. Buys and sells are simulated against the real OKX order
@@ -83,8 +106,13 @@ liquidity:
 paper:
   state_file: data/paper_state.json  # balances and open positions survive a restart
   fee_bps: 10              # fee per buy and per sell (10 = 0.10%)
-  max_position_pct: 45     # one position uses at most 45% of the account
+  max_position_pct: 30     # one position uses at most 30% of the account (limits damage from a crash)
   check_every_seconds: 2   # how often stop-loss / target are checked
+  # Idle money is kept in dollars (USDT): in the backtest (October 2026) TL
+  # lost value against the dollar, and the dollar pairs did better.
+  # TL money (the starting capital, an old TL trade) is changed into USDT
+  # once at the live rate, paying the fee.
+  cash_currency: USDT
 
 # --- Strategy (Phase 4): trend breakout ---------------------------------
 # Buys only when ALL are true at the close of a candle:
@@ -98,7 +126,7 @@ paper:
 # backtest (October 2026). The first setting was 1-hour candles + 4-hour trend.
 strategy:
   enabled: true
-  pairs: [BTC/TRY, ETH/TRY]
+  pairs: [BTC/USDT, ETH/USDT]  # must be priced in paper.cash_currency
   bar_minutes: 240         # 4-hour candles (60 = 1 hour, 1440 = daily)
   trend_bar_minutes: 1440  # daily candles for the big-picture trend
   trend_ema_fast: 20
@@ -133,10 +161,9 @@ backtest:
   slippage_bps: 10           # worse price on every buy and sell (0.10%), on top of the fee
   drawdown_pause_days: 7     # after an emergency stop: pause 7 days, then continue (0 = stop the test)
   compare_variants: true     # also test the other 2 fixed rule sets (1-hour and daily candles)
-  # Same rules on dollar pairs: idle money is kept in USDT instead of TL.
-  # Only the test uses these; the paper bot keeps trading the TL pairs above.
-  compare_usdt: true
-  usdt_pairs: [BTC/USDT, ETH/USDT]
+  # Every rule is also tested on these TL pairs (idle money kept in TL),
+  # so you can see side by side whether dollars still do better. [] = off.
+  compare_pairs: [BTC/TRY, ETH/TRY]
   cache_dir: data/candles
   report_file: data/backtest_report.txt
 
@@ -169,3 +196,30 @@ jarvis:
   enabled: true
   host: 127.0.0.1   # only programs on this computer can connect
   port: 8765
+  # summary = Jarvis only gets the end-of-day summary; all = every alert too.
+  # The bot never waits for Jarvis: it runs the same when Jarvis is off.
+  webhook_events: summary
+
+# --- End-of-day summary ------------------------------------------------
+# One short summary every evening: Telegram message + Jarvis + saved to a file.
+# If the bot was off at that time, yesterday's summary is written at the next start.
+daily_summary:
+  enabled: true
+  at: "23:55"       # Turkey time (keep the quotes)
+  file: data/daily_summaries.jsonl
+
+# Windows: do not let the computer go to sleep while the bot runs
+# (the screen can still turn off). Use ArkaPlanda-Calistir.bat to run the
+# bot hidden and start it automatically with Windows.
+keep_awake: true
+
+# --- Control Center (Phase 5) ------------------------------------------
+# One screen with everything: balance, positions, trades, limits, health
+# score, emergency stop. Opens in the browser; can be installed as an app
+# on the computer and added to the phone's home screen. The key is created
+# in .env (PANEL_KEY); Telegram /panel sends you the links.
+panel:
+  enabled: true
+  port: 8770
+  home_network: true    # true = phone on the same home Wi-Fi can open it
+  open_on_start: true   # open the panel in the browser when the bot starts

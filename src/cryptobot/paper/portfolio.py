@@ -150,6 +150,23 @@ class PaperPortfolio:
     def unrealized_try(self, pos: PaperPosition) -> Decimal:
         return self.position_value(pos) - pos.cost_try
 
+    def _stop_value(self, pos: PaperPosition, worse_bps: Decimal = Decimal(0)) -> Decimal:
+        """TRY value if the position were sold at its stop, `worse_bps` below it."""
+        amount = pos.quantity * pos.stop_price * (1 - worse_bps / 10_000)
+        value = self.to_risk(amount, pos.symbol.quote)
+        return value if value is not None else pos.cost_try * amount / (pos.quantity * pos.entry_price)
+
+    def open_risk(self, worse_bps: Decimal) -> Decimal:
+        """How much equity would fall if every open position stopped out now, `worse_bps` past its stop."""
+        return sum((max(Decimal(0), self.position_value(p) - self._stop_value(p, worse_bps))
+                    for p in self.positions.values()), Decimal(0))
+
+    def booked_equity(self) -> Decimal:
+        """Cash plus each position at what it cost or at its stop, whichever is higher:
+        profit already taken or locked in by a raised stop, without the paper profit on top."""
+        return self.cash_try() + sum((max(p.cost_try, self._stop_value(p)) for p in self.positions.values()),
+                                     Decimal(0))
+
     def cash_try(self) -> Decimal:
         total = Decimal(0)
         for ccy, amount in self.balances.items():
@@ -213,6 +230,30 @@ class PaperPortfolio:
         self.trades_closed += 1
         self.save()
         return ClosedTrade(pos.trade_id, symbol, pos.quantity, price, pnl_try, pnl_usd)
+
+    def convert_cash(self, target: str, fee_bps: Decimal) -> list[tuple[str, Decimal, Decimal]]:
+        """Change every other cash balance into `target` at the live rate, minus the fee.
+
+        Returns (currency, amount sold, target amount received) per conversion.
+        A balance without a fresh rate waits for the next call.
+        """
+        done = []
+        unit_try = self.to_risk(Decimal(1), target)
+        for ccy, amount in list(self.balances.items()):
+            if ccy == target or amount <= 0 or not unit_try:
+                continue
+            value_try = self.to_risk(amount, ccy)
+            if value_try is None:
+                continue
+            fee_try = value_try * fee_bps / 10_000
+            got = (value_try - fee_try) / unit_try
+            del self.balances[ccy]
+            self.balances[target] = self.balances.get(target, Decimal(0)) + got
+            self.fees_try += fee_try
+            done.append((ccy, amount, got))
+        if done:
+            self.save()
+        return done
 
     # ------------------------------------------------------------ views
 

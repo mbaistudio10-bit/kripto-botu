@@ -49,10 +49,11 @@ async def run_backtest(settings: Settings, adapter: ExchangeAdapter, days: int |
     want_start = now - timedelta(days=days)
     fetch_from = want_start - warmup
 
-    usdt_pairs = cfg.usdt_pairs if cfg.compare_usdt else []
+    main_pairs = list(settings.strategy.pairs)
+    other_pairs = [p for p in cfg.compare_pairs if p not in main_pairs]
     series: dict[Symbol, list[Candle]] = {}
     try:
-        for sym in [*settings.strategy.pairs, *usdt_pairs]:
+        for sym in [*main_pairs, *other_pairs]:
             series[sym] = await load_history(adapter, sym, base, fetch_from, cfg.cache_dir, now,
                                              progress=print)
             print(f"  {sym}: {len(series[sym])} mum")
@@ -66,28 +67,33 @@ async def run_backtest(settings: Settings, adapter: ExchangeAdapter, days: int |
         return 2, msg
 
     usable = {s: c for s, c in series.items() if c and c[0].ts + warmup + timedelta(days=30) < now}
-    tl_pairs = {s: c for s, c in usable.items() if s.quote != "USDT"}
-    usd_pairs = {s: c for s, c in usable.items() if s.quote == "USDT"}
-    if not tl_pairs:
+    # One account per quote currency: the bot's own pairs first.
+    by_quote: dict[str, dict[Symbol, list[Candle]]] = {}
+    for sym in [*main_pairs, *other_pairs]:
+        if sym in usable and (sym.quote == "TRY" or fx):  # a dollar account needs the USDT/TRY rate
+            by_quote.setdefault(sym.quote, {})[sym] = usable[sym]
+    main_quote = main_pairs[0].quote
+    if main_quote not in by_quote:
         return 3, "Test için yeterli geçmiş veri yok (çiftler yeni listelenmiş olabilir)."
-    if not fx:
-        usd_pairs = {}  # a dollar account needs the USDT/TRY rate
     # Every rule set trades the same dates: after the longest warm-up of all of them.
     start = max(want_start, max(c[0].ts for c in usable.values()) + warmup)
     end = max(c[-1].ts for c in usable.values()) + base_bar
     split = split_point(start, end, cfg.in_sample_pct, timedelta(days=1))
     pct = cfg.in_sample_pct
 
-    accounts = [("TRY", tl_pairs, "")]
-    if usd_pairs:
-        accounts.append(("USDT", usd_pairs, f" — dolar çiftleri ({', '.join(str(s) for s in usd_pairs)})"))
+    accounts = []
+    for quote, pairs in by_quote.items():
+        kind = "TL" if quote == "TRY" else "dolar"
+        suffix = f" — {kind} çiftleri ({', '.join(str(s) for s in pairs)})" if len(by_quote) > 1 else ""
+        accounts.append((quote, pairs, suffix))
     results = []
     for v, strat in zip(rule_sets, strategies):
         for quote, pairs, suffix in accounts:
             data = {s: c if v.strategy.bar_minutes == base else resample(c, base, v.strategy.bar_minutes)[0]
                     for s, c in pairs.items()}
             bt = Backtester(strat, v.exits, settings.risk, settings.paper, cfg.slippage_bps,
-                            float(settings.starting_capital), cfg.drawdown_pause_days, quote)
+                            float(settings.starting_capital), cfg.drawdown_pause_days, quote,
+                            settings.capital_guard)
             is_ = bt.run(data, start, split, f"Öğrenme dönemi (ilk %{pct:g})", fx)
             oos = bt.run(data, split, end, f"Sınama dönemi (son %{100 - pct:g}, kural bu dönemi hiç görmedi)", fx)
             results.append((dataclasses.replace(v, label=v.label + suffix) if suffix else v, is_, oos))
@@ -95,7 +101,7 @@ async def run_backtest(settings: Settings, adapter: ExchangeAdapter, days: int |
     pause = (f"acil durdurmadan sonra {cfg.drawdown_pause_days:g} gün ara verip devam eder"
              if cfg.drawdown_pause_days > 0 else "acil durdurmada durur")
     header = [
-        f"Çiftler: {', '.join(str(p) for p in tl_pairs)} | başlangıç parası "
+        f"Çiftler: {', '.join(str(p) for pairs in by_quote.values() for p in pairs)} | başlangıç parası "
         f"{_tr(float(settings.starting_capital))} TL (sahte), her dönem yeniden",
         f"Maliyet: komisyon %{_tr(float(settings.paper.fee_bps) / 100, 2)} + kayma "
         f"%{_tr(cfg.slippage_bps / 100, 2)} (her alış ve satışta)",
@@ -104,7 +110,13 @@ async def run_backtest(settings: Settings, adapter: ExchangeAdapter, days: int |
         f"haftalık %{settings.risk.max_weekly_loss_pct} / zirveden %{settings.risk.max_total_drawdown_pct}; "
         f"test {pause}",
     ]
-    if usd_pairs:
+    g = settings.capital_guard
+    if g.enabled:
+        header.append(f"Ana para koruması: taban başlangıcın %{_tr(float(g.max_loss_from_start_pct))} altı, "
+                      f"kârın %{_tr(float(g.lock_profit_pct))}'si kilitlenir; tabana inilirse acil durdurma"
+                      + (f"; üst üste {g.pause_after_losses} zararda {g.pause_hours} saat mola"
+                         if g.pause_after_losses else ""))
+    if "USDT" in by_quote:
         header.append("Dolar çiftlerinde aynı TL tutarı başta USDT'ye çevrilir; boştaki para dolar olarak "
                       "durur. Sonuç yine TL ve USD olarak gösterilir.")
     if len(usable) < len(series):

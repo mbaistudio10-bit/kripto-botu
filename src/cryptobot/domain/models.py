@@ -109,6 +109,12 @@ class OrderBook:
             levels = tuple(lv for lv in levels if abs(lv.price - mid) <= band)
         return sum((lv.price * lv.size for lv in levels), Decimal(0))
 
+    def imbalance_within(self, within_bps: Decimal) -> Decimal:
+        """Like imbalance, but only counting depth near the mid price."""
+        bid, ask = self.depth_quote("bid", within_bps), self.depth_quote("ask", within_bps)
+        total = bid + ask
+        return (bid - ask) / total if total else Decimal(0)
+
     @property
     def imbalance(self) -> Decimal:
         """(bid - ask) / (bid + ask) of quote depth; +1 all bids, -1 all asks."""

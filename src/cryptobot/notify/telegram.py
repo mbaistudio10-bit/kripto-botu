@@ -35,6 +35,7 @@ HELP_TEXT = (
     "/durdur - yeni işlem açmayı durdur (bot izlemeye devam eder)\n"
     "/devam - durdurmayı kaldır\n"
     "/onayla - ayar dosyasındaki gevşetilmiş limitleri onayla\n"
+    "/panel - Kontrol Merkezi bağlantısı (bilgisayar ve telefon)\n"
     "Alım, satım, stop-loss ve sistem hatalarında size anında mesaj gelir.\n"
     "Bu bot Telegram'dan emir göndermez. Yatırım tavsiyesi değildir."
 )
@@ -90,7 +91,9 @@ class TelegramBot:
         status_text: Callable[[], str],
         report_text: Callable[[str], str],
         console: Callable[[str], None] = print,
+        panel_text: Callable[[], str] | None = None,
     ) -> None:
+        self._panel_text = panel_text
         self._config = config
         self._api = api
         self._chat_id = chat_id
@@ -159,6 +162,8 @@ class TelegramBot:
             return self._engine.resume(confirm=arg.upper() == "ONAY")
         if cmd == "/onayla":
             return self._engine.approve_limits()
+        if cmd == "/panel":
+            return self._panel_text() if self._panel_text else "Kontrol Merkezi ayarlarda kapalı."
         if cmd == "/rapor":
             period = {"hafta": "hafta", "ay": "ay"}.get(arg.lower(), "gün")
             return self._report_text(period)

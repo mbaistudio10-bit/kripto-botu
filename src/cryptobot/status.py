@@ -185,6 +185,9 @@ def render_telegram(snapshot: dict[str, Any], utc_offset_hours: int = 3) -> str:
             f"Deneme hesabı: {_tr_num(pf['equity_try'])} TL (≈ {_tr_num(pf['equity_usd'])} USD), "
             f"başlangıç {_tr_num(pf['starting_capital'])} TL"
         )
+        cash = [f"{_tr_num(v)} {'TL' if k == 'TRY' else k}" for k, v in pf["balances"].items() if v != "0"]
+        if cash:
+            lines.append("Boştaki para: " + ", ".join(cash))
         lines.append(
             f"Kapanan işlemlerden kâr: {_tr_num(pf['realized_try'])} TL ({pf['trades_closed']} işlem), "
             f"ödenen komisyon {_tr_num(pf['fees_try'])} TL"

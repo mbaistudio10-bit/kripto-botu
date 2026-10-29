@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import time as dt_time
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
@@ -85,6 +86,24 @@ class LiquidityConfig(_Strict):
     depth_band_bps: Decimal = Field(default=Decimal(50), gt=0)
     # A pair must stay unfit this long before a Telegram warning is sent.
     alert_after_seconds: float = Field(default=120, ge=0)
+    # No buy while sellers clearly outweigh buyers near the price:
+    # (bid depth - ask depth) / total, from -1 (only sellers) to +1 (only buyers).
+    min_book_imbalance: Decimal = Field(default=Decimal("-0.3"), ge=-1, le=1)
+
+
+class CapitalGuardConfig(_Strict):
+    """Keeps the account above a floor near the money put in, and locks in part of every gain."""
+
+    enabled: bool = True
+    # The floor starts this far below the starting capital (fees make 0 impossible).
+    max_loss_from_start_pct: Decimal = Field(default=Decimal(2), gt=0, le=10)
+    # The floor rises by this share of the best profit so far (50 = keep half).
+    lock_profit_pct: Decimal = Field(default=Decimal(50), ge=0, le=90)
+    # Sizing assumes each stop may fill this much worse (a sudden drop jumps past it).
+    gap_allowance_bps: Decimal = Field(default=Decimal(50), ge=0, le=1000)
+    # After this many losing trades in a row, no new trade for `pause_hours` (0 = off).
+    pause_after_losses: int = Field(default=3, ge=0, le=20)
+    pause_hours: int = Field(default=24, ge=1, le=24 * 14)
 
 
 class TelegramConfig(_Strict):
@@ -106,6 +125,28 @@ class JarvisConfig(_Strict):
     # 127.0.0.1 = only programs on this computer can connect.
     host: str = "127.0.0.1"
     port: int = Field(default=8765, ge=1024, le=65535)
+    # What is pushed to JARVIS_WEBHOOK_URL: "summary" = only the end-of-day summary,
+    # "all" = every alert and trade as well.
+    webhook_events: Literal["summary", "all"] = "summary"
+
+
+class DailySummaryConfig(_Strict):
+    """One end-of-day summary for Telegram and Jarvis."""
+
+    enabled: bool = True
+    at: dt_time = dt_time(23, 55)  # local time (risk.reset_utc_offset_hours)
+    file: Path = Path("data/daily_summaries.jsonl")
+
+
+class PanelConfig(_Strict):
+    """Control Center: one screen with everything, for the computer and the phone."""
+
+    enabled: bool = True
+    port: int = Field(default=8770, ge=1024, le=65535)
+    # true = phones on the same home Wi-Fi can open it; false = this computer only.
+    home_network: bool = True
+    # Open the panel in the browser when the bot starts.
+    open_on_start: bool = True
 
 
 class PaperConfig(_Strict):
@@ -115,9 +156,13 @@ class PaperConfig(_Strict):
     # Exchange fee charged on every simulated buy and sell (10 = 0.10%, OKX spot taker).
     fee_bps: Decimal = Field(default=Decimal(10), ge=0)
     # One position may use at most this share of the account value.
-    max_position_pct: Decimal = Field(default=Decimal(45), gt=0, le=100)
+    max_position_pct: Decimal = Field(default=Decimal(30), gt=0, le=100)
     # How often open positions are checked against their stop and target.
     check_every_seconds: float = Field(default=2, gt=0)
+    # Idle money is kept in this currency. Money in any other currency (the
+    # TL starting capital, the proceeds of an old TRY-pair trade) is changed
+    # into it at the live rate, paying the fee once.
+    cash_currency: str = "USDT"
 
 
 def _symbols(v: object) -> list[Symbol]:
@@ -131,7 +176,7 @@ class StrategyConfig(_Strict):
     (higher-timeframe) trend is up. Decisions use closed candles only."""
 
     enabled: bool = True
-    pairs: list[Symbol] = Field(default_factory=lambda: [Symbol("BTC", "TRY"), Symbol("ETH", "TRY")])
+    pairs: list[Symbol] = Field(default_factory=lambda: [Symbol("BTC", "USDT"), Symbol("ETH", "USDT")])
     # 4-hour candles with a daily trend: the steadiest of the three rule sets
     # compared in the backtest (2026-10). 1-hour candles traded too often.
     bar_minutes: Literal[15, 30, 60, 120, 240, 1440] = 240
@@ -194,23 +239,23 @@ class BacktestConfig(_Strict):
     drawdown_pause_days: float = Field(default=7, ge=0)
     # Also test the fixed slower rule sets (backtest/variants.py) side by side.
     compare_variants: bool = True
-    # Also run every rule set on these dollar pairs: idle money then sits in
-    # USDT instead of TRY. Results are shown in TL and in USD.
-    compare_usdt: bool = True
-    usdt_pairs: list[Symbol] = Field(
-        default_factory=lambda: [Symbol("BTC", "USDT"), Symbol("ETH", "USDT")])
+    # Also run every rule set on these pairs, priced in the other currency
+    # (TL pairs when the bot trades dollar pairs), to compare where idle money
+    # does better. [] = off. Results are shown in TL and in USD.
+    compare_pairs: list[Symbol] = Field(
+        default_factory=lambda: [Symbol("BTC", "TRY"), Symbol("ETH", "TRY")])
     cache_dir: Path = Path("data/candles")
     report_file: Path = Path("data/backtest_report.txt")
 
-    @field_validator("usdt_pairs", mode="before")
+    @field_validator("compare_pairs", mode="before")
     @classmethod
-    def _parse_usdt_pairs(cls, v: object) -> list[Symbol]:
-        return _symbols(v)
+    def _parse_compare_pairs(cls, v: object) -> list[Symbol]:
+        return [] if v in (None, []) else _symbols(v)
 
     @model_validator(mode="after")
     def _check(self) -> BacktestConfig:
-        if any(p.quote != "USDT" for p in self.usdt_pairs):
-            raise ValueError("usdt_pairs must be priced in USDT, like [BTC/USDT, ETH/USDT]")
+        if len({p.quote for p in self.compare_pairs} | {"TRY", "USDT"}) > 2:
+            raise ValueError("compare_pairs must be priced in TRY or USDT, like [BTC/TRY, ETH/TRY]")
         return self
 
 
@@ -238,6 +283,7 @@ class Settings(_Strict):
     starting_capital: Decimal = Field(gt=0)
     starting_capital_currency: str
     risk: RiskLimits
+    capital_guard: CapitalGuardConfig = CapitalGuardConfig()
     exchange: ExchangeConfig
     market_data: MarketDataConfig
     fx: FxConfig
@@ -251,6 +297,10 @@ class Settings(_Strict):
     test_trigger: dict | None = None
     telegram: TelegramConfig = TelegramConfig()
     jarvis: JarvisConfig = JarvisConfig()
+    panel: PanelConfig = PanelConfig()
+    daily_summary: DailySummaryConfig = DailySummaryConfig()
+    # Windows: keep the computer from sleeping while the bot runs (the screen may turn off).
+    keep_awake: bool = True
 
     @field_validator("pairs", mode="before")
     @classmethod
@@ -276,7 +326,16 @@ class Settings(_Strict):
         unknown = [str(p) for p in self.strategy.pairs if p not in self.pairs]
         if unknown:
             raise ValueError(f"strategy pairs must also be in pairs: {unknown}")
-        for ccy in (self.display_currency, self.risk_currency, self.starting_capital_currency):
+        if len({p.quote for p in self.backtest.compare_pairs}) > 1:
+            raise ValueError("backtest.compare_pairs must all have the same quote currency")
+        wrong_quote = [str(p) for p in self.strategy.pairs if p.quote != self.paper.cash_currency]
+        if wrong_quote:
+            raise ValueError(
+                f"strategy pairs must be priced in paper.cash_currency "
+                f"{self.paper.cash_currency}: {wrong_quote}"
+            )
+        for ccy in (self.display_currency, self.risk_currency, self.starting_capital_currency,
+                    self.paper.cash_currency):
             if ccy not in assets:
                 raise ValueError(f"currency {ccy} is not in supported_assets")
         return self

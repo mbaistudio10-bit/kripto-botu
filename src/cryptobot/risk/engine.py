@@ -13,6 +13,8 @@ Who can clear what:
   daily / weekly loss halt   only time (next day / next Monday, Turkey time)
   manual stop, delist halt   the owner with /devam
   drawdown halt              the owner with "/devam ONAY" (resets the peak)
+  capital floor halt         the owner with "/devam ONAY" (rebuilds the floor)
+  loss streak pause          only time (pause_hours after N losing trades in a row)
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from typing import Any, Protocol
 
 from cryptobot.config import RISK_LIMIT_FIELDS, RiskLimits, Settings
 from cryptobot.domain.models import Symbol, TradingMode
-from cryptobot.events import EventLog, Level
+from cryptobot.events import STOP_LOSS_HIT, TRADE_CLOSED, Event, EventLog, Level
 from cryptobot.fmt import fmt_pct, fmt_try
 from cryptobot.market_data.fx import FxRateService
 from cryptobot.market_data.service import MarketDataService
@@ -43,6 +45,10 @@ _LIMIT_LABELS = {
     "max_total_drawdown_pct": "Zirveden en fazla düşüş %",
     "max_risk_per_trade_pct": "İşlem başına en fazla risk %",
 }
+
+
+# Who pressed stop/resume, as shown in the alert.
+_WHO = {"owner": "Siz (Telegram)", "panel": "Siz (Kontrol Merkezi)", "jarvis": "Jarvis"}
 
 
 class HaltLevel(IntEnum):
@@ -145,6 +151,7 @@ class RiskEngine:
         self.pending_limits: RiskLimits | None = None
         self.limits = self._resolve_limits(settings.risk)
         self._save()
+        events.subscribe(self._on_event)
 
     # ------------------------------------------------------------------ limits
 
@@ -237,12 +244,20 @@ class RiskEngine:
 
     def halts(self) -> list[Halt]:
         s, out = self._state, []
+        if s.floor_halt:
+            out.append(Halt("floor", HaltLevel.CLOSE_ALL,
+                            "Ana para koruması: bakiye taban seviyeye indi (acil durdurma)"))
         if s.drawdown_halt:
             out.append(Halt("drawdown", HaltLevel.CLOSE_ALL,
                             "Zirveden düşüş limiti aşıldı (acil durdurma)"))
         if s.weekly_halt_week:
             out.append(Halt("weekly", HaltLevel.NO_NEW_POSITIONS,
                             "Haftalık zarar limiti doldu (pazartesi kendiliğinden açılır)"))
+        if s.loss_pause_until:
+            until = datetime.fromisoformat(s.loss_pause_until) + self._offset
+            out.append(Halt("streak", HaltLevel.NO_NEW_POSITIONS,
+                            f"Üst üste zararlı işlemler: dinlenme molası ({until:%d.%m %H:%M}'e kadar, "
+                            "kendiliğinden açılır)"))
         if s.daily_halt_day:
             out.append(Halt("daily", HaltLevel.NO_NEW_POSITIONS,
                             "Günlük zarar limiti doldu (gece 00:00'da kendiliğinden açılır)"))
@@ -262,13 +277,14 @@ class RiskEngine:
         return self.halt_level is HaltLevel.CLOSE_ALL
 
     def stop(self, reason: str, by: str = "owner") -> str:
-        """Manual kill switch level 1. `by` is "owner" (Telegram) or "jarvis"."""
+        """Manual kill switch level 1. `by` is "owner" (Telegram), "panel" (the owner's
+        Control Center) or "jarvis"."""
         if self._state.manual_stop:
             return "Bot zaten durdurulmuş durumda."
         self._state.manual_stop = reason
         self._state.manual_stop_by = by
         self._save()
-        who = "Jarvis" if by == "jarvis" else "Siz (Telegram)"
+        who = _WHO.get(by, "Siz (Telegram)")
         self._events.emit(
             Level.UYARI,
             "manual_stop",
@@ -284,6 +300,9 @@ class RiskEngine:
     def resume(self, confirm: bool = False, by: str = "owner") -> str:
         """The owner can clear manual and delist halts (and drawdown with confirm).
         Jarvis can only lift a stop that Jarvis itself made."""
+        who = _WHO.get(by, "Siz (Telegram)")
+        if by == "panel":
+            by = "owner"  # the panel is the owner's own screen
         s = self._state
         notes: list[str] = []
         cleared: list[str] = []
@@ -292,9 +311,10 @@ class RiskEngine:
                 s.manual_stop = s.manual_stop_by = None
                 cleared.append("Jarvis'in durdurması")
             elif s.manual_stop:
-                notes.append("Bu durdurmayı sahibi yaptı; sadece Telegram'dan /devam ile kaldırılabilir.")
-            if s.drawdown_halt or s.delist_halts:
-                notes.append("Acil durdurma ve listeden çıkma güvenli modunu sadece sahibi kaldırabilir.")
+                notes.append("Bu durdurmayı sahibi yaptı; sadece sahibi (Telegram /devam veya Kontrol Merkezi) kaldırabilir.")
+            if s.drawdown_halt or s.floor_halt or s.delist_halts:
+                notes.append("Acil durdurma, ana para koruması ve listeden çıkma güvenli modunu "
+                             "sadece sahibi kaldırabilir.")
             confirm = False
         else:
             if s.manual_stop:
@@ -313,13 +333,24 @@ class RiskEngine:
                     "Acil durdurma (zirveden düşüş limiti) hâlâ açık. Bunu kaldırmak büyük bir "
                     "karar: emin iseniz \"/devam ONAY\" yazın."
                 )
+        if s.floor_halt and by == "owner":
+            if confirm:
+                s.floor_halt = False
+                s.guard_base = s.guard_peak = self._portfolio.equity()
+                cleared.append("ana para koruması (taban, şu anki bakiyeye göre yeniden kuruldu)")
+            else:
+                notes.append(
+                    "Ana para koruması hâlâ açık. Kaldırırsanız taban şu anki bakiyeye göre yeniden "
+                    "kurulur: emin iseniz \"/devam ONAY\" yazın."
+                )
         if s.weekly_halt_week:
             notes.append("Haftalık zarar limiti doldu; pazartesi kendiliğinden açılacak, elle kaldırılamaz.")
+        if s.loss_pause_until:
+            notes.append("Üst üste zarar molası kendiliğinden bitecek, elle kaldırılamaz.")
         if s.daily_halt_day:
             notes.append("Günlük zarar limiti doldu; gece 00:00'da kendiliğinden açılacak, elle kaldırılamaz.")
         self._save()
         if cleared:
-            who = "Jarvis" if by == "jarvis" else "Siz (Telegram)"
             self._events.emit(
                 Level.UYARI, "resumed", f"{who} devam ettirdi: " + ", ".join(cleared) + ".",
                 notify=True, key=by, by=by,
@@ -350,6 +381,11 @@ class RiskEngine:
             s.week_key, s.week_start_equity, changed = week, equity, True
         if s.peak_equity is None or equity > s.peak_equity:
             s.peak_equity, changed = equity, True
+        changed |= self._check_floor(equity)
+        if s.loss_pause_until and now >= datetime.fromisoformat(s.loss_pause_until):
+            s.loss_pause_until, changed = None, True
+            self._events.emit(Level.BILGI, "loss_pause_over",
+                              "Zarar molası bitti, bot yeniden alış yapabilir.", notify=True)
 
         assert s.day_start_equity is not None and s.week_start_equity is not None
         daily = _pct(s.day_start_equity - equity, s.day_start_equity)
@@ -399,6 +435,87 @@ class RiskEngine:
             "drawdown_pct": drawdown,
         }
         return self.snapshot(now)
+
+    # ------------------------------------------------------------------ capital guard
+
+    def _starting_capital_try(self) -> Decimal | None:
+        start = getattr(self._portfolio, "starting_capital_try", None)
+        if callable(start):
+            return start()
+        return self.to_try(self._settings.starting_capital, self._settings.starting_capital_currency)
+
+    def capital_floor(self) -> Decimal | None:
+        """The account value the bot defends: a little under the money put in, raised as profit
+        comes in. None while switched off or before the TL value of the capital is known."""
+        cfg, s = self._settings.capital_guard, self._state
+        if not cfg.enabled or s.guard_base is None:
+            return None
+        gain = max(Decimal(0), (s.guard_peak or s.guard_base) - s.guard_base)
+        return s.guard_base * (1 - cfg.max_loss_from_start_pct / 100) + gain * cfg.lock_profit_pct / 100
+
+    def _check_floor(self, equity: Decimal) -> bool:
+        if not self._settings.capital_guard.enabled:
+            return False
+        s, changed = self._state, False
+        if s.guard_base is None:
+            base = self._starting_capital_try()
+            if base is None:
+                return False
+            s.guard_base, s.guard_peak, changed = base, base, True
+        # Only profit that is taken, or locked in by a raised stop, lifts the floor.
+        # Paper profit that can still vanish would otherwise stop the bot on a normal pullback.
+        booked = getattr(self._portfolio, "booked_equity", None)
+        locked = booked() if callable(booked) else equity
+        if s.guard_peak is None or locked > s.guard_peak:
+            s.guard_peak, changed = locked, True
+        floor = self.capital_floor()
+        if floor is not None and equity <= floor and not s.floor_halt:
+            s.floor_halt, changed = True, True
+            self._events.emit(Level.KRITIK, "capital_floor_halt",
+                              f"ANA PARA KORUMASI: bakiye {fmt_try(equity)}, taban {fmt_try(floor)}. "
+                              "Yeni işlem yok, açık pozisyonlar kapatılacak. Kaldırmak için \"/devam ONAY\".",
+                              equity=equity, floor=floor)
+        return changed
+
+    def _floor_budget(self) -> Decimal | None:
+        """Most one new trade may risk so that all open trades hitting their stops together
+        still leave the account above the floor. None = no floor."""
+        floor = self.capital_floor()
+        if floor is None:
+            return None
+        free = max(1, self.limits.max_concurrent_positions - len(self._portfolio.open_symbols()))
+        open_risk = getattr(self._portfolio, "open_risk", None)
+        at_risk = open_risk(self._floor_cost_bps()) if callable(open_risk) else Decimal(0)
+        return max(Decimal(0), self._portfolio.equity() - at_risk - floor) / free
+
+    def _floor_cost_bps(self) -> Decimal:
+        """What the floor rule assumes a stop-out costs beyond the stop: fees, slippage and a gap."""
+        return self.limits.assumed_round_trip_cost_bps + self._settings.capital_guard.gap_allowance_bps
+
+    def _floor_unit_risk(self, entry: Decimal, stop: Decimal) -> Decimal:
+        return entry - stop + entry * self._floor_cost_bps() / Decimal(10_000)
+
+    # ------------------------------------------------------------------ loss streak
+
+    def _on_event(self, event: Event) -> None:
+        if event.kind not in (TRADE_CLOSED, STOP_LOSS_HIT):
+            return
+        cfg, s = self._settings.capital_guard, self._state
+        if not cfg.enabled or cfg.pause_after_losses <= 0:
+            return
+        pnl = Decimal(str(event.data.get("pnl_try", 0)))
+        s.loss_streak = s.loss_streak + 1 if pnl < 0 else 0
+        if s.loss_streak >= cfg.pause_after_losses:
+            s.loss_streak = 0
+            until = event.time + timedelta(hours=cfg.pause_hours)
+            s.loss_pause_until = until.isoformat(timespec="seconds")
+            self._events.emit(
+                Level.UYARI, "loss_streak_pause",
+                f"Üst üste {cfg.pause_after_losses} işlem zararla kapandı. Piyasa stratejiye uymuyor olabilir: "
+                f"bot {cfg.pause_hours} saat yeni alış yapmayacak (açık işlemler izlenmeye devam eder).",
+                until=s.loss_pause_until,
+            )
+        self._save()
 
     def _check_markets(self, now: datetime) -> bool:
         """FX freshness, pair health and delisting. Alerts only on changes."""
@@ -509,6 +626,19 @@ class RiskEngine:
                                    f"{fmt_pct(self.limits.max_risk_per_trade_pct)})")
                 if notional > equity:
                     reasons.append("İşlem büyüklüğü bakiyeyi aşıyor (kaldıraç yok)")
+                budget = self._floor_budget()
+                floor_risk = self.to_try(intent.quantity * self._floor_unit_risk(intent.entry_price,
+                                                                                   intent.stop_price),
+                                         intent.symbol.quote)
+                if budget is not None and floor_risk is not None and floor_risk > budget * Decimal("1.001"):
+                    reasons.append(f"Ana para koruması: bu işlemin olası zararı ({fmt_try(floor_risk)}) "
+                                   f"tabana kalan paydan büyük ({fmt_try(budget)})")
+        book = self._md.book(intent.symbol)
+        if book is not None:
+            imbalance = book.imbalance_within(self._settings.liquidity.depth_band_bps)
+            if imbalance < self._settings.liquidity.min_book_imbalance:
+                reasons.append(f"{intent.symbol}: emir defterinde satıcılar baskın "
+                               f"(denge {imbalance:+.2f}, sınır {self._settings.liquidity.min_book_imbalance})")
         return RiskDecision(not reasons, reasons, risk_amount, risk_pct)
 
     def _per_unit_risk(self, entry: Decimal, stop: Decimal) -> Decimal:
@@ -520,12 +650,18 @@ class RiskEngine:
         if stop <= 0 or stop >= entry:
             return None
         equity = self._portfolio.equity()
-        budget = equity * self.limits.max_risk_per_trade_pct / 100
         per_unit = self.to_try(self._per_unit_risk(entry, stop), symbol.quote)
         price = self.to_try(entry, symbol.quote)
         if not per_unit or not price:
             return None
-        return min(budget / per_unit, equity / price)
+        qty = min(equity * self.limits.max_risk_per_trade_pct / 100 / per_unit, equity / price)
+        floor_budget = self._floor_budget()
+        if floor_budget is not None:
+            floor_unit = self.to_try(self._floor_unit_risk(entry, stop), symbol.quote)
+            if not floor_unit:
+                return None
+            qty = min(qty, floor_budget / floor_unit)
+        return qty
 
     # ------------------------------------------------------------------ views
 
@@ -552,8 +688,25 @@ class RiskEngine:
             "open_positions": len(self._portfolio.open_symbols()),
             "limits": {f: str(getattr(lim, f)) for f in RISK_LIMIT_FIELDS},
             "limits_pending_approval": self.pending_limits is not None,
+            "capital_guard": self._guard_snapshot(),
             "pairs": {str(sym): {"tradable": not p, "problems": p} for sym, p in self._pair_problems.items()},
         }
+
+    def _guard_snapshot(self) -> dict[str, Any] | None:
+        floor, s = self.capital_floor(), self._state
+        if floor is None or s.guard_base is None:
+            return None
+        equity = self._portfolio.equity()
+        cushion = (s.guard_peak or s.guard_base) - floor
+        used = _pct((s.guard_peak or s.guard_base) - equity, cushion) if cushion > 0 else Decimal(100)
+        return {"base": f"{s.guard_base:.2f}", "peak": f"{(s.guard_peak or s.guard_base):.2f}",
+                "floor": f"{floor:.2f}", "headroom": f"{max(Decimal(0), equity - floor):.2f}",
+                "used_pct": f"{min(used, Decimal(100)):.2f}",
+                "max_loss_from_start_pct": str(self._settings.capital_guard.max_loss_from_start_pct),
+                "lock_profit_pct": str(self._settings.capital_guard.lock_profit_pct),
+                "loss_streak": s.loss_streak,
+                "pause_after_losses": self._settings.capital_guard.pause_after_losses,
+                "pause_hours": self._settings.capital_guard.pause_hours}
 
     def limits_text(self) -> str:
         ev, lim = self._last_eval, self.limits
@@ -567,6 +720,14 @@ class RiskEngine:
             f"• Açık pozisyon: {len(self._portfolio.open_symbols())} / {lim.max_concurrent_positions}",
             f"• Kur en fazla {int(self._settings.fx.max_age_seconds // 60)} dakika eski olabilir",
         ]
+        floor = self.capital_floor()
+        if floor is not None:
+            lines.append(f"• Ana para tabanı: {fmt_try(floor)} (bakiye bunun altına inerse bot durur; "
+                         "kâr geldikçe taban yükselir)")
+            cfg = self._settings.capital_guard
+            if cfg.pause_after_losses:
+                lines.append(f"• Üst üste {cfg.pause_after_losses} zararlı işlemden sonra {cfg.pause_hours} saat mola "
+                             f"(şu an üst üste {self._state.loss_streak})")
         if self.pending_limits is not None:
             lines.append("Not: ayar dosyasında onay bekleyen gevşek limitler var (/onayla).")
         return "\n".join(lines)
