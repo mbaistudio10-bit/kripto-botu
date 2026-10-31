@@ -141,6 +141,16 @@ Limitleri `config/settings.yaml` dosyasından değiştirebilirsiniz. **Sıkıla�
 
 ## 5. Jarvis bağlantısı
 
+**Jarvis'e bağlamanın en kolay yolu (tünel gerekmez):** `.env` dosyasına şu satırı ekleyip botu yeniden başlatın:
+
+```
+JARVIS_SYNC_URL=https://jarvis.mbaistudio10.workers.dev/api/kriptobot/senkron
+```
+
+Bot her dakika durumunu Jarvis'e kendisi gönderir. Jarvis'ten "yeni emirleri durdur" derseniz, bot bunu en geç 1 dakika içinde alır.
+Açılışta "Jarvis'e otomatik bağlantı açık" yazısını görürsünüz. Jarvis tarafında Cloudflare'e iki anahtarın girilmiş olması gerekir
+(`KRIPTOBOT_TOKEN` = `JARVIS_READ_KEY`, `KRIPTOBOT_KONTROL_ANAHTARI` = `JARVIS_CONTROL_KEY`).
+
 Bot ilk açılışta `.env` dosyasına Jarvis için iki anahtar yazar:
 - `JARVIS_READ_KEY`: sadece okuma (durum, rapor, olaylar)
 - `JARVIS_CONTROL_KEY`: acil durumda **durdurma ve devam ettirme**

@@ -16,6 +16,11 @@ Bot -> Jarvis: if JARVIS_WEBHOOK_URL is set, the end-of-day summary (or, with
   HMAC-SHA256 (header X-KriptoBotu-Signature, key = read key). A summary is retried until
   Jarvis answers, so it arrives even if Jarvis was off. The bot never waits for Jarvis.
 
+Bot -> Jarvis sync (no tunnel needed): if JARVIS_SYNC_URL is set, the bot POSTs the same
+  overview every 60 s (signed like the webhook, plus "sent_at" and "done_commands").
+  Jarvis may answer {"komutlar": [{"id", "tur": "durdur" | "devam", "neden"}]}; the bot runs them
+  only if the answer carries X-Jarvis-Signature = hex(HMAC-SHA256(JARVIS_CONTROL_KEY, body)).
+
 Jarvis can never place orders, change limits, or lift a loss-limit / drawdown halt.
 Every control call is written to the event log and echoed to Telegram.
 """
@@ -217,6 +222,88 @@ class JarvisWebhook:
                 except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                     log.warning("jarvis webhook failed (try %d): %s", attempt + 1, exc)
                 await asyncio.sleep(min(2 ** attempt, max_wait))
+
+
+class JarvisSync:
+    """Bot -> Jarvis: pushes the overview on a timer, so Jarvis needs no tunnel to this computer.
+
+    Jarvis' answer may hold emergency stop/resume requests. They run only when Jarvis signed the
+    answer with the control key, each command id runs once, and nothing else can be requested.
+    A failed send is logged and retried on the next tick; the bot never waits for Jarvis.
+    """
+
+    def __init__(self, url: str, read_key: str, control_key: str | None, engine: RiskEngine,
+                 overview: Callable[[], dict[str, Any]], session: aiohttp.ClientSession,
+                 interval: float = 60.0) -> None:
+        self._url = url
+        self._read = read_key.encode()
+        self._control = control_key.encode() if control_key else None
+        self._engine = engine
+        self._overview = overview
+        self._session = session
+        self._interval = interval
+        self._done: list[str] = []          # ids to report back to Jarvis
+        self._seen: list[str] = []          # ids already run (never run twice)
+        self.last_ok: datetime | None = None
+
+    @staticmethod
+    def _sign(key: bytes, body: bytes) -> str:
+        return hmac.new(key, body, hashlib.sha256).hexdigest()
+
+    async def run(self) -> None:
+        while True:
+            ran = False
+            try:
+                ran = await self.sync_once()
+            except Exception as exc:  # noqa: BLE001 - the bot must keep running whatever Jarvis does
+                log.warning("jarvis sync failed: %s", exc)
+            # After a command, report the new state right away.
+            await asyncio.sleep(2 if ran else self._interval)
+
+    async def sync_once(self) -> bool:
+        """One send. Returns True if a command from Jarvis was run."""
+        payload = dict(self._overview())
+        payload["sent_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        payload["done_commands"] = list(self._done)
+        body = json.dumps(payload, ensure_ascii=False, default=str).encode()
+        headers = {"Content-Type": "application/json", "X-KriptoBotu-Signature": self._sign(self._read, body)}
+        async with self._session.post(self._url, data=body, headers=headers,
+                                      timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            raw = await resp.read()
+            signature = resp.headers.get("X-Jarvis-Signature", "")
+            if resp.status != 200:
+                log.warning("jarvis sync: Jarvis answered HTTP %s", resp.status)
+                return False
+        self._done = []          # Jarvis has them now
+        self.last_ok = datetime.now(timezone.utc)
+        try:
+            answer = json.loads(raw or b"{}")
+        except ValueError:
+            return False
+        commands = answer.get("komutlar") if isinstance(answer, dict) else None
+        if not isinstance(commands, list) or not commands:
+            return False
+        if self._control is None or not hmac.compare_digest(self._sign(self._control, raw), signature):
+            log.warning("jarvis sync: commands without a valid control signature were ignored")
+            return False
+        ran = False
+        for cmd in commands[:5]:
+            if not isinstance(cmd, dict):
+                continue
+            cid = str(cmd.get("id") or "")[:64]
+            if not cid:
+                continue
+            if cid not in self._seen:
+                kind = cmd.get("tur")
+                if kind == "durdur":
+                    self._engine.stop(str(cmd.get("neden") or "Jarvis'ten durduruldu")[:200], by="jarvis")
+                    ran = True
+                elif kind == "devam":
+                    self._engine.resume(by="jarvis")
+                    ran = True
+                self._seen = (self._seen + [cid])[-200:]
+            self._done.append(cid)
+        return ran
 
 
 async def start_api(api: JarvisApi, host: str, port: int) -> web.AppRunner:

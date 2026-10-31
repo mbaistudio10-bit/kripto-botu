@@ -19,7 +19,7 @@ from pydantic import ValidationError
 
 import aiohttp
 
-from cryptobot.api.jarvis import JarvisApi, JarvisWebhook, start_api
+from cryptobot.api.jarvis import JarvisApi, JarvisSync, JarvisWebhook, start_api
 from cryptobot.api.panel import PanelApi, backtest_summary, build_overview, panel_links, start_panel
 from cryptobot.autostart import autostart_command, hide_console
 from cryptobot.backtest.run import run_backtest, send_to_telegram
@@ -120,16 +120,16 @@ def setup_telegram(
 def setup_jarvis(
     settings: Settings, events: EventLog, engine: RiskEngine, snapshot_fn, session: aiohttp.ClientSession,
     overview_fn=None, summaries: SummaryStore | None = None,
-) -> tuple[JarvisApi | None, JarvisWebhook | None]:
+) -> tuple[JarvisApi | None, JarvisWebhook | None, JarvisSync | None]:
     cfg = settings.jarvis
     if not cfg.enabled:
-        return None, None
+        return None, None, None
     env_path = settings.telegram.env_file
     try:
         added = ensure_keys(env_path, ["JARVIS_READ_KEY", "JARVIS_CONTROL_KEY"])
     except OSError as exc:
         print(f"Jarvis anahtarları {env_path} dosyasına yazılamadı: {exc}. Jarvis bağlantısı kapalı.")
-        return None, None
+        return None, None, None
     if added:
         print(f"Jarvis için iki anahtar oluşturuldu ve {env_path} dosyasına yazıldı "
               "(JARVIS_READ_KEY: sadece okuma, JARVIS_CONTROL_KEY: acil durdurma). Bunları sadece Jarvis'e verin.")
@@ -139,13 +139,17 @@ def setup_jarvis(
                         settings.risk.reset_utc_offset_hours, overview=overview_fn, summaries=summaries)
     except (KeyError, ValueError) as exc:
         print(f"Jarvis bağlantısı kapalı: anahtarlar hatalı ({exc}).")
-        return None, None
+        return None, None, None
     webhook = None
     if env.get("JARVIS_WEBHOOK_URL"):
         webhook = JarvisWebhook(env["JARVIS_WEBHOOK_URL"], env["JARVIS_READ_KEY"], session,
                                 summary_only=cfg.webhook_events == "summary")
         events.subscribe(webhook.on_event)
-    return api, webhook
+    sync = None
+    if env.get("JARVIS_SYNC_URL") and overview_fn is not None:
+        sync = JarvisSync(env["JARVIS_SYNC_URL"], env["JARVIS_READ_KEY"], env.get("JARVIS_CONTROL_KEY"),
+                          engine, overview_fn, session)
+    return api, webhook, sync
 
 
 def setup_panel(settings: Settings, events: EventLog, engine: RiskEngine, overview_fn) -> PanelApi | None:
@@ -301,7 +305,7 @@ async def run(settings: Settings, once: bool, background: bool = False) -> int:
             panel = setup_panel(settings, events, engine, state)
             telegram = setup_telegram(settings, events, engine, snapshot, session,
                                       (lambda: panel_text(settings)) if panel is not None else None)
-            jarvis_api, jarvis_hook = setup_jarvis(settings, events, engine, snapshot, session, overview,
+            jarvis_api, jarvis_hook, jarvis_sync = setup_jarvis(settings, events, engine, snapshot, session, overview,
                                                    summaries)
             if jarvis_api is not None:
                 try:
@@ -314,7 +318,8 @@ async def run(settings: Settings, once: bool, background: bool = False) -> int:
             env = load_env(settings.telegram.env_file)
             links = Links(telegram_token=telegram is not None,
                           telegram_chat=parse_chat_id(env.get("TELEGRAM_CHAT_ID")) is not None,
-                          jarvis_api=jarvis_running, jarvis_webhook=jarvis_hook is not None)
+                          jarvis_api=jarvis_running,
+                          jarvis_webhook=jarvis_hook is not None or jarvis_sync is not None)
             if panel is not None:
                 host = "0.0.0.0" if settings.panel.home_network else "127.0.0.1"
                 try:
@@ -327,6 +332,9 @@ async def run(settings: Settings, once: bool, background: bool = False) -> int:
                     print(f"Kontrol Merkezi açılamadı (port {settings.panel.port} dolu olabilir): {exc}")
             if jarvis_hook is not None:
                 tasks.append(asyncio.create_task(jarvis_hook.run(), name="jarvis-webhook"))
+            if jarvis_sync is not None:
+                tasks.append(asyncio.create_task(jarvis_sync.run(), name="jarvis-sync"))
+                print("Jarvis'e otomatik bağlantı açık: durum her dakika Jarvis'e gönderiliyor (tünel gerekmez).")
             if settings.daily_summary.enabled:
                 daily = DailySummaryTask(snapshot, events, summaries, settings.daily_summary.at,
                                          settings.risk.reset_utc_offset_hours, started_at)
